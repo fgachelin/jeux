@@ -1,0 +1,1474 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>BMX Dirt</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #f4efe6; font-family: system-ui, sans-serif;
+               overscroll-behavior: none; touch-action: none; -webkit-user-select: none; user-select: none; }
+  canvas { display: block; touch-action: none; }
+  #tol { position: fixed; top: 14px; right: 16px; background: rgba(255,255,255,0.75); border: 1px solid #d8cdbd;
+         border-radius: 8px; padding: 8px 12px; font-size: 13px; color: #333; z-index: 6;
+         max-height: calc(100vh - 28px); overflow-y: auto; touch-action: pan-y; }
+  body.touchmode #tol { top: 56px; background: rgba(255,255,255,0.95); max-height: calc(100vh - 70px); }
+  #tol.collapsed { display: none; }
+  #tol select { font: inherit; font-size: 13px; padding: 3px 4px; border-radius: 6px; border: 1px solid #c9b9a3; max-width: 190px; }
+  #tol .btnrow { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 2px; }
+  #tol .btnrow .btn { flex: 1 1 auto; }
+  #tol .help { color: #666; font-size: 11px; margin-top: 6px; max-width: 200px; }
+  #tol .sep { border-top: 1px solid #e3d9c9; margin: 10px 0 4px; }
+  #padStatus { margin-top: 4px; }
+  #padStatus.ok { color: #2e7d32; }
+
+  /* bouton de menu (smartphone) */
+  #menuBtn { position: fixed; top: calc(10px + env(safe-area-inset-top)); right: calc(10px + env(safe-area-inset-right)); z-index: 8; }
+
+  /* commandes tactiles */
+  #touch { position: fixed; inset: 0; z-index: 5; pointer-events: none; touch-action: none;
+           --b: clamp(64px, 21vmin, 100px); --s: clamp(44px, 12.5vmin, 58px);
+           --pl: calc(12px + env(safe-area-inset-left)); --pr: calc(12px + env(safe-area-inset-right));
+           --pb: calc(12px + env(safe-area-inset-bottom)); }
+  #touch[hidden] { display: none; }
+  .tb { position: absolute; pointer-events: auto; touch-action: none; box-sizing: border-box; padding: 0;
+        display: flex; align-items: center; justify-content: center; text-align: center; line-height: 1.1;
+        font: 700 12px system-ui, sans-serif; color: #4a3b2a; background: rgba(255,255,255,0.55);
+        border: 2px solid rgba(74,59,42,0.4); border-radius: 50%; -webkit-tap-highlight-color: transparent;
+        -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
+  .tb.on { background: rgba(230,126,34,0.85); color: #fff; border-color: #d35400; }
+  .tb.big { width: var(--b); height: var(--b); font-size: clamp(11px, 3vmin, 15px); }
+  .tb.small { width: var(--s); height: var(--s); font-size: clamp(9px, 2.4vmin, 12px); }
+  #touch .fig { opacity: 0.45; }
+  #touch.air .fig { opacity: 1; }
+  #tbBrake { left: var(--pl); bottom: var(--pb); }
+  #tbGas   { left: calc(var(--pl) + var(--b) + 12px); bottom: var(--pb); width: calc(var(--b) * 1.2); height: calc(var(--b) * 1.2); }
+  #tbJump  { right: var(--pr); bottom: var(--pb); width: calc(var(--b) * 1.2); height: calc(var(--b) * 1.2); }
+  #tbDown  { right: calc(var(--pr) + var(--b) * 1.2 + 12px); bottom: var(--pb); }
+  #figs { position: absolute; right: var(--pr); bottom: calc(var(--pb) + var(--b) * 1.2 + 12px); display: grid;
+          grid-template-columns: repeat(4, var(--s)); gap: 8px; pointer-events: none; }
+  #figs .tb { position: static; }
+
+  /* barre du replay (smartphone) */
+  #replayBar { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(14px + env(safe-area-inset-bottom));
+               z-index: 7; display: flex; gap: 8px; }
+  #replayBar[hidden] { display: none; }
+  #replayBar .btn { min-width: 48px; min-height: 44px; font-size: 16px; }
+
+  /* consigne en mode portrait */
+  #rotate { position: fixed; inset: 0; z-index: 20; display: none; align-items: center; justify-content: center;
+            text-align: center; background: rgba(244,239,230,0.97); color: #4a3b2a; font: 600 20px system-ui; padding: 24px; }
+  @media (orientation: portrait) and (pointer: coarse) { #rotate { display: flex; } }
+  #tol input { width: 180px; vertical-align: middle; }
+  #tol .hint { color: #777; font-size: 11px; display: flex; justify-content: space-between; }
+  #tol .row { margin-top: 10px; }
+  /* curseur double (min / max) : deux curseurs superposés, seuls les boutons captent la souris */
+  #tol .dual { position: relative; width: 180px; height: 22px; }
+  #tol .dual .track, #tol .dual .fill { position: absolute; top: 9px; height: 4px; border-radius: 2px; }
+  #tol .dual .track { left: 0; right: 0; background: #d8cdbd; }
+  #tol .dual .fill { background: #e67e22; }
+  #tol .dual input { position: absolute; left: 0; top: 9px; width: 100%; height: 4px; margin: 0;
+                     background: none; pointer-events: none; -webkit-appearance: none; appearance: none; }
+  #tol .dual input::-webkit-slider-runnable-track { height: 4px; background: transparent; }
+  #tol .dual input::-moz-range-track { height: 4px; background: transparent; }
+  #tol .dual input::-webkit-slider-thumb { -webkit-appearance: none; pointer-events: auto; cursor: pointer;
+                     width: 14px; height: 14px; margin-top: -5px; border-radius: 50%; background: #e67e22;
+                     border: 2px solid #fff; box-shadow: 0 0 0 1px #999; }
+  #tol .dual input::-moz-range-thumb { pointer-events: auto; cursor: pointer; width: 12px; height: 12px;
+                     border-radius: 50%; background: #e67e22; border: 2px solid #fff; box-shadow: 0 0 0 1px #999; }
+
+  .btn { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 6px; border: 1px solid #c9b9a3;
+         background: #fff; color: #333; cursor: pointer; }
+  .btn:hover { background: #f7f1e8; }
+  .btn.primary { background: #e67e22; border-color: #d35400; color: #fff; }
+  .btn.primary:hover { background: #d35400; }
+  .btn.danger { color: #c0392b; border-color: #e3b3ad; }
+
+  /* éditeur de sauts */
+  #editor { position: fixed; inset: 0; z-index: 10; background: #f4efe6; color: #333; overflow: auto;
+            padding: 16px; box-sizing: border-box; font-size: 14px; }
+  #editor[hidden] { display: none; }
+  .ed-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+  .ed-head h2 { margin: 0; font-size: 20px; }
+  .ed-body { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+  .ed-draw { flex: 3 1 480px; min-width: 0; }
+  .ed-lib { flex: 1 1 280px; min-width: 0; }
+  .ed-lib h3 { margin: 0 0 4px; font-size: 16px; }
+  .ed-help { color: #666; font-size: 13px; margin: 0 0 8px; }
+  #edCanvas { width: 100%; background: #fffdf9; border: 1px solid #d8cdbd; border-radius: 8px; cursor: crosshair;
+              touch-action: none; }
+  .ed-row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .ed-row input { flex: 1 1 160px; font: inherit; padding: 6px 8px; border: 1px solid #c9b9a3; border-radius: 6px; }
+  .ed-tools { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+  .ed-tools .btn.on { background: #e67e22; border-color: #d35400; color: #fff; }
+  #editor { touch-action: pan-y; }
+  .ed-smooth { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+  .ed-smooth b { min-width: 44px; }
+  .ed-info { color: #666; font-size: 13px; min-height: 1.2em; }
+  .ed-item { background: #fff; border: 1px solid #d8cdbd; border-radius: 8px; padding: 8px; margin-bottom: 8px; }
+  .ed-item .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .ed-item .name { font-weight: 600; }
+  .ed-item .meta { color: #777; font-size: 12px; }
+  .ed-item canvas { width: 100%; height: 60px; margin: 6px 0; }
+  .ed-item label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .ed-item input[type=range] { flex: 1; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<button id="menuBtn" class="btn" hidden>☰ Réglages</button>
+
+<div id="touch" hidden>
+  <button class="tb big" id="tbBrake" data-key="PadBrake">FREIN</button>
+  <button class="tb big" id="tbGas" data-key="PadGas">PÉDALER</button>
+  <div id="figs">
+    <button class="tb small fig" data-key="r">360°</button>
+    <button class="tb small fig" data-key="x">X-up</button>
+    <button class="tb small fig" data-key="b">Bar&shy;spin</button>
+    <button class="tb small fig" data-key="t">Tail&shy;whip</button>
+    <button class="tb small fig" data-key="m">Main</button>
+    <button class="tb small fig" data-key="p">Pied</button>
+    <button class="tb small fig" data-key="s">Super&shy;man</button>
+  </div>
+  <button class="tb big" id="tbDown" data-key="ArrowDown">BAS</button>
+  <button class="tb big" id="tbJump" data-key="ArrowUp">SAUT</button>
+</div>
+
+<div id="replayBar" hidden>
+  <button class="btn" id="rbBack">⏪ 5 s</button>
+  <button class="btn" id="rbPause">⏸</button>
+  <button class="btn" id="rbFwd">5 s ⏩</button>
+  <button class="btn" id="rbSlow">Ralenti</button>
+  <button class="btn" id="rbQuit">✕</button>
+</div>
+<div id="rotate">Tourne ton téléphone en mode paysage ↻</div>
+
+<div id="tol">
+  <label>Commandes<br>
+  <select id="ctrlMode">
+    <option value="keyboard">Clavier</option>
+    <option value="touch">Tactile (smartphone)</option>
+    <option value="pad">Manette Bluetooth</option>
+  </select></label>
+  <div id="padStatus" class="hint"></div>
+  <div class="help" id="padHelp" hidden>Manette PS5 : maintiens PS + Créer jusqu'au clignotement ; PS4 : PS + Share.
+    Associe-la dans les réglages Bluetooth du téléphone, puis appuie sur un bouton. Elle marche aussi sur PC.</div>
+  <div class="btnrow">
+    <button class="btn" id="bNew">Nouvelle partie</button>
+    <button class="btn" id="bReplay">Replay</button>
+    <button class="btn" id="bFull">Plein écran</button>
+  </div>
+  <div class="help">iPhone : « Partager » puis « Sur l'écran d'accueil » pour jouer en plein écran.</div>
+  <div class="sep"></div>
+
+  <label>Sévérité des chutes : <b id="tolVal">1.00</b><br>
+  <input id="tolRange" type="range" min="0" max="1" step="0.05" value="1"></label>
+  <div class="hint"><span>0 : jamais</span><span>1 : strict</span></div>
+
+  <label><div class="row">Frottement de l'air : <b id="dragVal">1.00</b></div>
+  <input id="dragRange" type="range" min="0" max="1" step="0.05" value="1"></label>
+  <div class="hint"><span>0 : aucun</span><span>1 : réaliste</span></div>
+
+  <div class="row">Hauteur des sauts : <b id="hRangeVal"></b></div>
+  <div class="dual" id="hRange"><div class="track"></div><div class="fill"></div>
+    <input type="range" min="0.5" max="4" step="0.1"><input type="range" min="0.5" max="4" step="0.1"></div>
+
+  <div class="row">Longueur des sauts : <b id="lRangeVal"></b></div>
+  <div class="dual" id="lRange"><div class="track"></div><div class="fill"></div>
+    <input type="range" min="1" max="15" step="0.5"><input type="range" min="1" max="15" step="0.5"></div>
+
+  <div class="row">Angle de sortie du saut : <b id="aRangeVal"></b></div>
+  <div class="dual" id="aRange"><div class="track"></div><div class="fill"></div>
+    <input type="range" min="10" max="80" step="1"><input type="range" min="10" max="80" step="1"></div>
+  <div class="hint"><span>s'applique à la piste hors écran</span></div>
+  <button id="edOpen" class="btn" style="margin-top:10px;width:100%">Éditeur de sauts (E)</button>
+</div>
+
+<div id="editor" hidden>
+  <div class="ed-head">
+    <h2>Éditeur de sauts</h2>
+    <button id="edClose" class="btn">Retour au jeu (Échap)</button>
+  </div>
+  <div class="ed-body">
+    <section class="ed-draw">
+      <p class="ed-help">Clic : ajouter un point de contrôle (au-delà de la fin, le saut s'allonge) · glisser : déplacer un point ·
+        double-clic : point lisse ● / anguleux ■ (pour la lèvre d'une bosse d'appel) · clic droit : supprimer un point.
+        Au doigt : choisis l'outil juste au-dessus (ajouter / déplacer, lisse ou anguleux, supprimer), puis touche le point.
+        Le départ et la fin (gris) restent au niveau de la piste (ligne épaisse) ; la fin se déplace pour régler la longueur.
+        Un carreau = 1 m. Le profil est relissé à chaque modification (réglage « Lissage ») : avec un lissage fort,
+        la courbe passe près des points sans forcément les toucher, mais les points anguleux et les extrémités restent exacts.</p>
+      <div class="ed-tools" id="edTools">
+        <button class="btn on" data-tool="move">Point : ajouter / déplacer</button>
+        <button class="btn" data-tool="sharp">Point lisse ● / anguleux ■</button>
+        <button class="btn" data-tool="del">Supprimer un point</button>
+      </div>
+      <canvas id="edCanvas" height="320"></canvas>
+      <div class="ed-row">
+        <input id="edName" type="text" placeholder="Nom du saut" maxlength="40">
+        <label class="ed-smooth">Lissage <input id="edSmooth" type="range" min="0" max="2" step="0.1"> <b id="edSmoothVal"></b></label>
+        <button id="edClear" class="btn">Nouveau tracé</button>
+        <button id="edSave" class="btn primary">Ajouter à la bibliothèque</button>
+      </div>
+      <p id="edInfo" class="ed-info"></p>
+    </section>
+    <section class="ed-lib">
+      <h3>Bibliothèque de sauts</h3>
+      <p class="ed-help">Les sauts de la piste sont tirés au hasard dans cette liste.</p>
+      <div id="edList"></div>
+      <button id="edRestore" class="btn">Restaurer les sauts d'origine</button>
+    </section>
+  </div>
+</div>
+<script>
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+let W, H;
+// le canvas a la résolution réelle de l'écran (plafonnée à 2) pour rester net sur smartphone
+function resize() {
+  const dpr = Math.min(2, typeof devicePixelRatio === 'number' ? devicePixelRatio : 1);
+  W = innerWidth; H = innerHeight;
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+addEventListener('resize', resize);
+resize();
+
+// ---------- Constantes (40 px = 1 m) ----------
+const PX_PER_M = 40;
+const G = 9.8 * PX_PER_M;
+const WHEEL_R = 13;
+const PEDAL_ACC = 170, V_PEDAL_MAX = 440;
+const BRAKE_ACC = 380;
+const V_CREEP = 10 / 3.6 * PX_PER_M;  // vitesse minimale en montée en pédalant (10 km/h le long de la pente)
+const ROLL = 8;
+// Traînée réaliste : ½·ρ·SCx·v²/m avec ρ = 1,2 kg/m³, SCx ≈ 0,5 m² (pilote debout), m ≈ 80 kg
+// → 0,00375 /m, soit 0,00375 / 40 en unités pixel
+const DRAG_REAL = 0.00375 / PX_PER_M;
+const TRAIL_SLOPE = 0.05;            // pente générale de la piste vers la droite (5 %, ~2,9°)
+// impulsion verticale du saut : 2 m/s sans détente (petit bunny hop) à 3,5 m/s détente complète (~0,6 m d'élévation)
+const JUMP_V_MIN = 2 * PX_PER_M, JUMP_V_MAX = 3.5 * PX_PER_M, JUMP_CHARGE_TIME = 1;
+const JUMP_GRACE = 0.3;              // délai pendant lequel la détente reste chargée après avoir lâché ↓
+const LANDING_BONUS = 0.15;          // gain de vitesse max pour une réception parfaitement parallèle au sol
+const PUMP_GAIN = 0.55;
+const AIR_SPIN_ACC = 14, AIR_SPIN_MAX = 6;
+// Figures en l'air
+const YAW_SPEED = 2 * Math.PI / 0.8;            // rotation R : un tour en 0,8 s tant que la touche est enfoncée
+const WHIP_SPEED = 2 * Math.PI / 0.45;          // un tailwhip en 0,45 s
+const BARSPIN_SPEED = 2 * Math.PI / 0.35;       // un barspin en 0,35 s
+const XUP_SPEED = Math.PI / 0.25;                // x-up : guidon tourné de 180° en 0,25 s
+const DOUBLE_TAP = 0.35;                         // délai max entre deux appuis pour « m+m », « p+p »
+const normAng = a => Math.atan2(Math.sin(a), Math.cos(a));
+
+// Curseur de sévérité : 0 = on ne tombe jamais, 1 = tolérance d'origine
+let severity = 1;
+const tolRange = document.getElementById('tolRange'), tolVal = document.getElementById('tolVal');
+try { const s = localStorage.getItem('bmx-severity'); if (s !== null) severity = +s; } catch (e) {}
+tolRange.value = severity; tolVal.textContent = severity.toFixed(2);
+tolRange.addEventListener('input', () => {
+  severity = +tolRange.value; tolVal.textContent = severity.toFixed(2);
+  try { localStorage.setItem('bmx-severity', severity); } catch (e) {}
+});
+tolRange.addEventListener('change', () => tolRange.blur());
+
+// Curseur de frottement de l'air : 0 = aucun, 1 = réaliste
+let dragFactor = 1;
+const dragRange = document.getElementById('dragRange'), dragVal = document.getElementById('dragVal');
+try { const s = localStorage.getItem('bmx-drag'); if (s !== null) dragFactor = +s; } catch (e) {}
+dragRange.value = dragFactor; dragVal.textContent = dragFactor.toFixed(2);
+dragRange.addEventListener('input', () => {
+  dragFactor = +dragRange.value; dragVal.textContent = dragFactor.toFixed(2);
+  try { localStorage.setItem('bmx-drag', dragFactor); } catch (e) {}
+});
+dragRange.addEventListener('change', () => dragRange.blur());
+const lerp = (a, b, t) => a + (b - a) * t;
+
+// Curseurs doubles hauteur / longueur / angle des sauts ; renvoie une fonction qui lit [min, max]
+function dualSlider(id, key, def, onDone, unit = ' m', decimals = 1) {
+  const box = document.getElementById(id);
+  const [lo, hi] = box.querySelectorAll('input');
+  const fill = box.querySelector('.fill'), out = document.getElementById(id + 'Val');
+  let v = def;
+  try { const s = JSON.parse(localStorage.getItem(key)); if (Array.isArray(s) && s.length === 2) v = s; } catch (e) {}
+  lo.value = v[0]; hi.value = v[1];
+  const show = () => {
+    const min = +lo.min, span = +lo.max - min;
+    fill.style.left = (lo.value - min) / span * 100 + '%';
+    fill.style.right = (lo.max - hi.value) / span * 100 + '%';
+    out.textContent = (+lo.value).toFixed(decimals) + ' – ' + (+hi.value).toFixed(decimals) + unit;
+  };
+  lo.addEventListener('input', () => { if (+lo.value > +hi.value) hi.value = lo.value; show(); });
+  hi.addEventListener('input', () => { if (+hi.value < +lo.value) lo.value = hi.value; show(); });
+  for (const el of [lo, hi]) el.addEventListener('change', () => {
+    el.blur();
+    try { localStorage.setItem(key, JSON.stringify([+lo.value, +hi.value])); } catch (e) {}
+    onDone();
+  });
+  show();
+  return () => [+lo.value, +hi.value];
+}
+const heightRange = dualSlider('hRange', 'bmx-height', [0.9, 1.5], () => regenAhead());
+const lengthRange = dualSlider('lRange', 'bmx-length', [3, 7], () => regenAhead());
+const angleRange = dualSlider('aRange', 'bmx-angle', [40, 50], () => regenAhead(), '°', 0);
+const jumpHeight = () => rnd(...heightRange()) * PX_PER_M;
+const jumpLength = () => rnd(...lengthRange()) * PX_PER_M;
+const jumpAngle = () => rnd(...angleRange()) * Math.PI / 180;
+
+// ---------- Terrain (une simple ligne) ----------
+let heights = [];
+let segStarts = [], segBase = [];   // début de chaque élément de piste et baseH à ce moment-là
+let lips = [];       // { x, ang, dir } : lèvres d'envol ; dir = sens de roulage (1 droite, -1 gauche), ang = angle de sortie / horizontale
+let baseH = 0;
+const rnd = (a, b) => a + Math.random() * (b - a);
+const smooth = t => t * t * (3 - 2 * t);
+
+function addSeg(len, f) {
+  len = Math.round(len);
+  for (let i = 0; i < len; i++) heights.push(baseH + f(i / len));
+}
+// Bosse d'appel de hauteur Hk dont la pente finale fait l'angle ang avec l'horizontale
+// (profil Hk·t² : pente finale 2·Hk/R, en tenant compte de la pente générale de la piste)
+function addKicker(Hk, ang) {
+  addSeg(2 * Hk / (Math.tan(ang) + TRAIL_SLOPE), t => Hk * t * t);
+  lips.push({ x: heights.length, ang, dir: 1 });
+}
+// Repère les lèvres d'envol dans le terrain ajouté depuis `start` : un point où, dans le sens de roulage d, la pente
+// montante (> 8,5°) casse net (chute de plus de 0,3). Une cassure s'étend sur plusieurs points ; on garde le plus haut.
+function scanLips(start, dirs) {
+  const g = i => heights[i] - TRAIL_SLOPE * i;
+  const end = heights.length;
+  for (const d of dirs) {
+    let run = null;
+    const flush = () => { if (run) { lips.push({ x: run.top, ang: Math.atan(run.slope), dir: d }); run = null; } };
+    for (let i = Math.max(16, start); i < end - 16; i++) {
+      const before = (g(i - 4 * d) - g(i - 16 * d)) / 12, after = (g(i + 16 * d) - g(i + 4 * d)) / 12;
+      if (before > 0.15 && after < before - 0.3) {
+        if (!run) run = { top: i, slope: before };
+        run.slope = Math.max(run.slope, before);
+        if (g(i) >= g(run.top)) run.top = i;
+      } else flush();
+    }
+    flush();
+  }
+}
+// ---------- Bibliothèque de motifs de saut ----------
+// type 'proc' : saut d'origine généré avec les curseurs (kind = rollers / table / double)
+// type 'drawn' : profil tracé dans l'éditeur, pts = [[x, y], …] en mètres (x croissant, départ et arrivée à 0)
+// scale : échelle appliquée au motif (longueur et hauteur)
+const DEFAULT_LIBRARY = [
+  { id: 'rollers', name: 'Bosses (rollers)', type: 'proc', kind: 'rollers', scale: 1 },
+  { id: 'table', name: 'Table', type: 'proc', kind: 'table', scale: 1 },
+  { id: 'double', name: 'Double', type: 'proc', kind: 'double', scale: 1 },
+];
+let library = DEFAULT_LIBRARY.map(e => ({ ...e }));
+try { const s = JSON.parse(localStorage.getItem('bmx-library')); if (Array.isArray(s)) library = s; } catch (e) {}
+function saveLibrary() { try { localStorage.setItem('bmx-library', JSON.stringify(library)); } catch (e) {} }
+
+// Les bosses d'appel des sauts d'origine sont déjà enregistrées pour rouler vers la droite (addKicker) ;
+// on repère ensuite les lèvres du même profil pour rouler vers la gauche
+function addProc(kind, sc) {
+  const start = heights.length;
+  addProcShape(kind, sc);
+  if (kind !== 'rollers') scanLips(start, [-1]);
+}
+function addProcShape(kind, sc) {
+  if (kind === 'rollers') {
+    const n = 2 + Math.floor(Math.random() * 3), L = rnd(140, 180) * sc, A = rnd(18, 32) * sc;
+    for (let k = 0; k < n; k++) addSeg(L, t => A * (1 - Math.cos(2 * Math.PI * t)) / 2);
+  } else if (kind === 'table') {
+    // tabletop : la longueur du saut est celle de la table
+    const Hk = jumpHeight() * sc;
+    addKicker(Hk, jumpAngle());
+    addSeg(jumpLength() * sc, () => Hk);
+    addSeg(Hk * rnd(3.3, 4.3), t => Hk * (1 + Math.cos(Math.PI * t)) / 2);
+  } else {
+    // double : kicker, trou, réception ; la longueur va du sommet du kicker au sommet de la réception
+    const Hk = jumpHeight() * sc;
+    const back = Math.max(30, 0.9 * Hk), face = Math.max(35, Hk);
+    const gap = Math.max(0, jumpLength() * sc - back - face);
+    addKicker(Hk, jumpAngle());
+    addSeg(back, t => Hk * (1 - smooth(t)));
+    addSeg(gap, () => 0);
+    addSeg(face, t => 0.9 * Hk * smooth(t));
+    addSeg(0.9 * Hk * rnd(3.8, 4.8), t => 0.9 * Hk * (1 + Math.cos(Math.PI * t)) / 2);
+  }
+}
+
+// Profil tracé : interpolé au pixel, puis on repère les lèvres d'envol dans les deux sens de roulage
+// (lissage seulement pour les anciens tracés à main levée ; une courbe à points de contrôle est déjà lisse)
+function addDrawn(pts, sc, smoothIt) {
+  const P = pts.map(([x, y]) => [x * sc * PX_PER_M, y * sc * PX_PER_M]);
+  const len = Math.max(2, Math.round(P[P.length - 1][0]));
+  let h = new Float32Array(len);
+  for (let i = 0, j = 0; i < len; i++) {
+    while (j < P.length - 2 && P[j + 1][0] < i) j++;
+    const [x0, y0] = P[j], [x1, y1] = P[j + 1];
+    h[i] = y0 + (y1 - y0) * Math.min(1, Math.max(0, (i - x0) / ((x1 - x0) || 1)));
+  }
+  for (let pass = 0; pass < (smoothIt ? 2 : 0); pass++) {
+    const o = new Float32Array(len);
+    for (let i = 0; i < len; i++) {
+      let s = 0, n = 0;
+      for (let k = Math.max(0, i - 5); k <= Math.min(len - 1, i + 5); k++) { s += h[k]; n++; }
+      o[i] = s / n;
+    }
+    h = o;
+  }
+  const start = heights.length;
+  for (let i = 0; i < len; i++) heights.push(baseH + h[i]);
+  scanLips(start, [1, -1]);
+}
+
+function addEntry(e) {
+  if (e.type === 'drawn') addDrawn(e.pts, e.scale, !e.ctrl);
+  else addProc(e.kind, e.scale);
+}
+
+function genFeature() {
+  segStarts.push(heights.length); segBase.push(baseH);
+  if (heights.length < 600 || Math.random() < 0.2 || !library.length) {
+    let d = rnd(-25, 25);
+    if (baseH + d > 80 || baseH + d < -80) d = -d;
+    addSeg(rnd(200, 380), t => d * smooth(t));
+    baseH += d;
+  } else {
+    addEntry(library[Math.floor(Math.random() * library.length)]);
+  }
+}
+
+// Profil d'un motif seul (pour les aperçus de l'éditeur), en pixels, sans toucher à la piste
+function sampleProfile(e) {
+  const saved = [heights, lips, baseH];
+  heights = []; lips = []; baseH = 0;
+  addEntry(e);
+  const out = heights;
+  [heights, lips, baseH] = saved;
+  return out;
+}
+function ground(x) {
+  while (heights.length < x + 3000) genFeature();
+  if (x < 0) return heights[0] - TRAIL_SLOPE * x;
+  const i = Math.floor(x), f = x - i;
+  return heights[i] * (1 - f) + heights[i + 1] * f - TRAIL_SLOPE * x;
+}
+// Regénère la piste au-delà de ce qui est visible (après un changement de réglage)
+function regenAhead() {
+  const from = Math.max(camX + W, p.x) + 100;
+  const i = segStarts.findIndex(s => s > from);
+  if (i < 0) return;
+  heights.length = segStarts[i]; baseH = segBase[i];
+  segStarts.length = i; segBase.length = i;
+  lips = lips.filter(k => k.x < heights.length);
+}
+// Lèvre d'envol franchie entre x0 et x1 en roulant dans le sens d (1 droite, -1 gauche)
+function lipCrossed(x0, x1, d) {
+  for (let i = lips.length - 1; i >= 0; i--) {
+    const k = lips[i];
+    if (k.x < Math.min(x0, x1) - 3000) break;
+    if (k.dir === d && (d > 0 ? x0 < k.x && x1 >= k.x : x1 <= k.x && x0 > k.x)) return k;
+  }
+  return null;
+}
+// Sommet du sol entre la roue arrière et la roue avant (vélo à cheval sur un sommet), ou null
+function crestBetween(rearX, frontX) {
+  const lo = Math.min(rearX, frontX), hi = Math.max(rearX, frontX);
+  let best = null, top = Math.max(ground(lo), ground(hi)) + 0.5;
+  for (let x = lo + 2; x < hi - 1; x += 2) {
+    const y = ground(x);
+    if (y > top) { top = y; best = x; }
+  }
+  return best;
+}
+function slope(x) { return Math.atan((ground(x + 3) - ground(x - 3)) / 6); }
+
+// ---------- Entrées ----------
+const keys = {};
+// appui sur une touche (clavier ou bouton de manette traduit en touche)
+function keyDown(key, repeat, time) {
+  if (key === 'l' || key === 'L') { if (!repeat) toggleReplay(); return; }
+  if (replay) return;   // pendant le replay, les commandes du jeu sont ignorées
+  if (key === 'ArrowUp' && !keys.ArrowUp) wantJump = true;
+  if (key === 'n' || key === 'N') reset();
+  // X : au sol et à l'arrêt = avancer de 10 m ; en l'air = x-up (géré dans step)
+  if ((key === 'x' || key === 'X') && !repeat && !p.air) skipAhead();
+  // figures : m / m+m = une / deux mains et p / p+p = un / deux pieds, lâchés tant que la touche reste enfoncée
+  // (le 2e appui rapproché donne « deux ») ; t / t+t = tailwhip simple / double (en l'air)
+  const k = key.toLowerCase();
+  if (!repeat) {
+    const t = time / 1000;
+    if (k === 'm') { handsMode = t - lastTap.m < DOUBLE_TAP ? 2 : 1; lastTap.m = t; }
+    if (k === 'p') { feetMode = t - lastTap.p < DOUBLE_TAP ? 2 : 1; lastTap.p = t; }
+    if (k === 't' && p.air && p.crashed <= 0) { if (!p.whipN) p.whipN = 1; else if (p.whipN === 1) p.whipN = 2; }
+    if (k === 'b' && p.air && p.crashed <= 0 && !p.spinOn) p.spinOn = true;
+  }
+  keys[key] = true;
+}
+addEventListener('keydown', e => {
+  if (editorOpen) { if (e.key === 'Escape') closeEditor(); return; }
+  if (replay && replayKey(e)) return;
+  if (e.key === 'e' || e.key === 'E') { openEditor(); return; }
+  if (e.key.startsWith('Arrow')) e.preventDefault();
+  keyDown(e.key, e.repeat, e.timeStamp);
+});
+addEventListener('keyup', e => { keys[e.key] = false; });
+
+// ---------- Manette PlayStation (API Gamepad, disposition standard) ----------
+// chaque commande de la manette est traduite en touche du clavier, pour réutiliser toute la logique
+const PAD_MAP = [
+  ['ArrowRight', g => g.buttons[15]?.pressed || g.axes[0] > 0.5],    // → croix / stick : pédaler vers la droite, pivoter
+  ['ArrowLeft',  g => g.buttons[14]?.pressed || g.axes[0] < -0.5],   // ← croix / stick : pédaler vers la gauche, pivoter
+  ['PadGas',     g => g.buttons[7]?.pressed],                         // R2 : pédaler dans le sens du vélo (en l'air : pivoter horaire)
+  ['PadBrake',   g => g.buttons[6]?.pressed],                         // L2 : freiner (en l'air : pivoter anti-horaire)
+  ['ArrowUp',    g => g.buttons[12]?.pressed || g.buttons[0]?.pressed],                       // ↑ croix / bouton Croix : sauter
+  ['ArrowDown',  g => g.buttons[13]?.pressed || g.axes[1] > 0.5],                             // ↓ croix / stick : se baisser
+  ['m', g => g.buttons[1]?.pressed],   // Rond : main(s)
+  ['p', g => g.buttons[2]?.pressed],   // Carré : pied(s)
+  ['t', g => g.buttons[3]?.pressed],   // Triangle : tailwhip
+  ['r', g => g.buttons[5]?.pressed],   // R1 : rotation 360
+  ['x', g => g.buttons[4]?.pressed],   // L1 : x-up (en l'air), avancer de 10 m (à l'arrêt)
+  ['b', g => g.axes[3] < -0.5],        // stick droit vers le haut : barspin
+  ['s', g => g.axes[3] > 0.5],         // stick droit vers le bas : superman
+  ['n', g => g.buttons[9]?.pressed],   // Options : nouvelle partie
+  ['l', g => g.buttons[8]?.pressed],   // Créer : replay de la dernière minute
+];
+const padHeld = {};
+let padConnected = false;
+function pollGamepad() {
+  const pads = navigator.getGamepads ? [...navigator.getGamepads()].filter(Boolean) : [];
+  padConnected = pads.length > 0;
+  for (const [key, test] of PAD_MAP) {
+    const on = pads.some(g => test(g));
+    if (on && !padHeld[key]) keyDown(key, false, performance.now());
+    if (!on && padHeld[key]) keys[key] = false;
+    padHeld[key] = on;
+  }
+}
+let wantJump = false;
+let handsMode = 1, feetMode = 1;
+const lastTap = { m: -1, p: -1 };
+const held = k => keys[k] || keys[k.toUpperCase()];
+// au sol, on pédale avec la flèche du côté où regarde le vélo (ou R2), on freine avec l'autre (ou L2)
+const gasOn = () => keys.PadGas || (p.dir > 0 ? keys.ArrowRight : keys.ArrowLeft);
+const brakeOn = () => keys.PadBrake || (p.dir > 0 ? keys.ArrowLeft : keys.ArrowRight);
+
+// ---------- État ----------
+let p, best = 0, msg = '', msgT = 0, particles = [];
+try { best = +localStorage.getItem('bmx-best') || 0; } catch (e) {}
+
+// ---------- Rampe de départ ----------
+// Plateforme puis descente en cosinus (pente max ~32°) ; sa hauteur est calculée pour arriver en bas
+// à RAMP_TARGET_V en roue libre (sans pédaler ni pumper), avec les frottements réglés au moment du départ
+const RAMP_TARGET_V = 40 / 3.6 * PX_PER_M;   // 40 km/h
+const RAMP_PLATFORM = 150, RAMP_RUNOUT = 400, START_X = 100;
+let rampEndX = 0, rampReported = false;
+const rampShape = (H, x) => {
+  const L = 2.5 * H;
+  return x < RAMP_PLATFORM ? H : x < RAMP_PLATFORM + L ? H * (1 + Math.cos(Math.PI * (x - RAMP_PLATFORM) / L)) / 2 : 0;
+};
+// Vitesse en bas d'une rampe de hauteur H, avec la même physique que le jeu (pas de 1/240 s)
+function rampEndSpeed(H) {
+  const end = RAMP_PLATFORM + 2.5 * H, dt = 1 / 240;
+  let x = START_X, v = 0;
+  for (let n = 0; x < end && n < 240 * 60; n++) {
+    const th = Math.atan((rampShape(H, x + 3) - rampShape(H, x - 3)) / 6 - TRAIL_SLOPE);
+    const a = -G * Math.sin(th);
+    const fr = ROLL + DRAG_REAL * dragFactor * v * v;
+    v = Math.max(0, v + (a - (v > 0 || a > fr ? fr : a)) * dt);
+    x += v * Math.cos(th) * dt;
+  }
+  return v;
+}
+function addStartRamp() {
+  let lo = 10, hi = 4000;   // hauteur en pixels, recherche par dichotomie
+  for (let i = 0; i < 30; i++) { const m = (lo + hi) / 2; if (rampEndSpeed(m) < RAMP_TARGET_V) lo = m; else hi = m; }
+  const H = hi;
+  segStarts.push(0); segBase.push(0);
+  rampEndX = RAMP_PLATFORM + 2.5 * H;
+  for (let x = 0; x < rampEndX; x++) heights.push(rampShape(H, x));
+  addSeg(RAMP_RUNOUT, () => 0);
+  rampReported = false;
+}
+
+function reset() {
+  heights = []; segStarts = []; segBase = []; lips = []; baseH = 0;
+  addStartRamp();
+  rec = []; recDur = 0; replay = null;   // le replay ne remonte pas avant une nouvelle partie
+  downHold = 0; downGrace = 0;
+  p = { x: 100, y: 0, v: 0, vx: 0, vy: 0, air: false, ang: 0, crouch: 0,
+        crank: 0, wheel: 0, crashed: 0, maxX: 100, airTime: 0,
+        av: 0, rot: 0, crashRot: 0, crashTarget: 0, dir: 1,
+        segI: 0, entry: { x: 100, v: 180 } };   // entry : début de l'élément de piste en cours et vitesse en y entrant
+  clearTricks();
+  p.y = ground(p.x);
+  camX = 0; camY = p.y; camLead = 0.3;
+}
+let camX = 0, camY = 0, camLead = 0.3;
+const LEFT_STOP = 20;   // butée à gauche de la plateforme de départ
+let downHold = 0, downGrace = 0;
+const jumpCharge = () => Math.min(1, downHold / JUMP_CHARGE_TIME);
+
+// Après une chute : on repart juste avant l'élément de piste raté, avec la vitesse qu'on avait en y entrant
+function respawn() {
+  p.x = Math.max(100, p.entry.x - 40);
+  p.y = ground(p.x); p.v = Math.max(180, p.entry.v); p.air = false; p.ang = slope(p.x);
+  p.crashed = 0; p.av = 0; p.crashRot = 0; p.dir = 1;
+}
+
+// Points du vélo et du pilote (repère local : origine entre les deux roues au sol, y vers le bas)
+function bodyPoints(c) {
+  const pts = [];
+  for (const cx of [-20, 20])
+    for (let k = 0; k < 8; k++) {
+      const a = k * Math.PI / 4;
+      pts.push([cx + Math.cos(a) * WHEEL_R, -WHEEL_R + Math.sin(a) * WHEEL_R]);
+    }
+  const hx = 11 + 4 * c, hy = -77 + 16 * c;
+  pts.push([hx, hy - 9], [hx + 8, hy], [hx - 8, hy], [11, -38], [5 + 2 * c, -68 + 15 * c], [-5 - 4 * c, -49 + 11 * c]);
+  return pts;
+}
+// De combien le point le plus bas passe sous la ligne du sol (> 0 = pénétration)
+function penetration(x, y, a, c) {
+  let m = -Infinity;
+  const cs = Math.cos(-a), sn = Math.sin(-a);
+  for (const [lx, ly] of bodyPoints(c)) {
+    const rx = lx * cs - ly * sn, ry = lx * sn + ly * cs;
+    m = Math.max(m, ground(x + rx) - (y - ry));
+  }
+  return m;
+}
+
+// Avance de 10 m, uniquement à l'arrêt (au sol, pas en train de chuter)
+function skipAhead() {
+  if (p.air || p.crashed > 0 || Math.abs(p.v) > 5) return;
+  p.x += 10 * PX_PER_M;
+  p.y = ground(p.x); p.v = 0; p.ang = slope(p.x);
+}
+
+// yaw : rotation autour de l'axe vertical (360), whip : rotation du cadre (tailwhip), whipN : tours prévus,
+// hands / feet : 0, 1 ou 2 lâchés, tr : figures réalisées pendant le saut
+function clearTricks() {
+  // bar : angle du guidon pour le x-up, spin : barspin en cours (spinOn)
+  // sup : 0 → 1, position superman (corps et jambes tendus vers l'arrière, mains au guidon)
+  Object.assign(p, { yaw: 0, whip: 0, whipN: 0, hands: 0, feet: 0, bar: 0, spin: 0, spinOn: false, sup: 0 });
+  p.tr = { hands: 0, feet: 0, whips: 0, xup: false, spins: 0, superman: false };
+}
+function startAir() {
+  p.air = true; p.airTime = 0; p.av = 0; p.rot = 0;
+  clearTricks();
+}
+
+function crash(th) {
+  p.crashed = 1.6; msg = 'Chute !'; msgT = 1.6;
+  p.air = false; p.av = 0;
+  clearTricks();
+  p.v = (p.vx || p.v) * 0.5;
+  p.y = ground(p.x);
+  // le bonhomme bascule et finit couché du côté où il penchait
+  const side = normAng(p.ang - th) > 0 ? 1 : -1;
+  p.crashRot = 0;
+  p.crashTarget = normAng(th + side * 1.35 - p.ang);
+  for (let i = 0; i < 25; i++) dust(p.x, p.y, rnd(-150, 150), rnd(40, 220));
+}
+function dust(x, y, vx, vy) { particles.push({ x, y, vx, vy, t: rnd(0.4, 0.9) }); }
+
+// ---------- Physique ----------
+function step(dt) {
+  if (p.crashed > 0) {
+    p.crashed -= dt;
+    p.v -= Math.sign(p.v) * Math.min(Math.abs(p.v), 500 * dt);
+    p.x += p.v * dt;
+    p.y = ground(p.x);
+    p.crashRot += (p.crashTarget - p.crashRot) * Math.min(1, dt * 6);
+    if (p.crashed <= 0) respawn();
+    return;
+  }
+  const down = keys.ArrowDown;
+  p.crouch += ((down ? 1 : 0) - p.crouch) * Math.min(1, dt * 12);
+  // détente du saut : se charge pendant 1 s de ↓, reste chargée un court instant après l'avoir lâché
+  if (down) { downHold += dt; downGrace = JUMP_GRACE; }
+  else if ((downGrace -= dt) <= 0) downHold = 0;
+
+  if (!p.air) {
+    const th = slope(p.x);
+    let a = -G * Math.sin(th);
+    // pumping : on charge les descentes (dans le sens où l'on roule) en baissant le centre de gravité
+    if (down && p.v * a > 0) a += PUMP_GAIN * a;
+    // pédaler fait avancer dans le sens où regarde le vélo ; freiner = la flèche opposée
+    const gas = gasOn(), brake = brakeOn();
+    if (gas) a += p.dir * PEDAL_ACC * Math.max(0, 1 - Math.max(0, p.v * p.dir) / V_PEDAL_MAX);
+    const fr = ROLL + DRAG_REAL * dragFactor * (down ? 0.6 : 1) * p.v * p.v + (brake ? BRAKE_ACC : 0);
+    // la vitesse peut devenir négative (le vélo recule) si la pente l'impose ; les frottements et le frein
+    // ramènent la vitesse vers zéro sans jamais l'inverser
+    p.v += a * dt;
+    p.v = Math.abs(p.v) <= fr * dt ? 0 : p.v - Math.sign(p.v) * fr * dt;
+    // en montée (dans le sens où regarde le vélo) et en pédalant, le vélo avance toujours un peu
+    if (p.dir * th > 0 && gas) p.v = p.dir * Math.max(p.v * p.dir, V_CREEP);
+    if (brake && Math.abs(p.v) > 60 && Math.random() < 0.5) dust(p.x - 20 * Math.sign(p.v), p.y, -p.v * 0.3, rnd(10, 60));
+    // butée à gauche de la rampe de départ
+    if (p.x < LEFT_STOP && p.v < 0) { p.v = 0; p.x = LEFT_STOP; }
+
+    const vx = p.v * Math.cos(th), vy = p.v * Math.sin(th);
+    const nx = p.x + vx * dt;
+    const gy = ground(nx);
+    const by = p.y + vy * dt - 0.5 * G * dt * dt;
+    const rd = p.v < 0 ? -1 : 1;   // sens de roulage
+    const kick = Math.abs(p.v) > 60 ? lipCrossed(p.x, nx, rd) : null;
+    if (kick && !wantJump) {
+      // passage de la lèvre d'une bosse d'appel : envol dans l'axe de sa pente finale, dans le sens de roulage
+      startAir(); p.vx = p.v * Math.cos(kick.ang); p.vy = Math.abs(p.v) * Math.sin(kick.ang);
+      p.x = kick.x; p.y = ground(kick.x) + 0.5; p.ang = rd * kick.ang;
+    } else if (wantJump) {
+      const jv = lerp(JUMP_V_MIN, JUMP_V_MAX, jumpCharge());
+      downHold = 0;
+      startAir(); p.vx = vx - Math.sin(th) * jv * 0.3; p.vy = vy + jv;
+      p.x = nx; p.y = gy + 1;
+    } else if (by > gy + 0.8 && Math.abs(p.v) > 60) {
+      startAir(); p.vx = vx; p.vy = vy - G * dt; p.x = nx; p.y = by;
+    } else {
+      p.x = nx; p.y = gy;
+    }
+    p.ang += (slope(p.x) - p.ang) * Math.min(1, dt * 20);
+    p.wheel += (vx * dt) / WHEEL_R;
+    if (gas) p.crank += Math.abs(p.v) * dt / 14 + dt * 4;
+  } else {
+    p.airTime += dt;
+    p.vy -= G * dt;
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    if (p.x < LEFT_STOP && p.vx < 0) { p.x = LEFT_STOP; p.vx = 0; }
+    // en l'air : → (ou R2) pivote dans le sens horaire, ← (ou L2) dans le sens anti-horaire, à l'écran
+    const spin = (keys.ArrowLeft || keys.PadBrake ? 1 : 0) - (keys.ArrowRight || keys.PadGas ? 1 : 0);
+    p.av += spin * AIR_SPIN_ACC * dt;
+    p.av *= Math.exp(-(spin ? 0.5 : 2.5) * dt);
+    p.av = Math.max(-AIR_SPIN_MAX, Math.min(AIR_SPIN_MAX, p.av));
+    p.ang += p.av * dt; p.rot += p.av * dt;
+    p.wheel += p.vx * dt / WHEEL_R * 0.6;
+
+    // rotation autour de l'axe vertical, seulement tant que D (droite) ou G (gauche) est enfoncée
+    if (held('r')) p.yaw += YAW_SPEED * dt;
+    // x-up : guidon tourné vers 180° tant que X est enfoncée, revient en place au relâchement
+    p.bar = held('x') ? Math.min(Math.PI, p.bar + XUP_SPEED * dt) : Math.max(0, p.bar - XUP_SPEED * dt);
+    if (p.bar > 0.8 * Math.PI) p.tr.xup = true;
+    // barspin : le guidon fait un tour complet
+    if (p.spinOn) {
+      p.spin += BARSPIN_SPEED * dt;
+      if (p.spin >= 2 * Math.PI) { p.tr.spins++; p.spin = 0; p.spinOn = false; }
+    }
+    // tailwhip : le cadre fait 1 ou 2 tours autour de la colonne de direction
+    if (p.whipN) {
+      p.whip += WHIP_SPEED * dt;
+      if (p.whip >= p.whipN * 2 * Math.PI) { p.tr.whips += p.whipN; p.whip = 0; p.whipN = 0; }
+    }
+    // mains / pieds lâchés tant que M / P est enfoncée
+    p.hands = held('m') ? handsMode : 0;
+    p.feet = held('p') ? feetMode : 0;
+    // superman (sans les pieds) tant que S est enfoncée ; on se rétablit au relâchement
+    p.sup = held('s') ? Math.min(1, p.sup + dt / 0.25) : Math.max(0, p.sup - dt / 0.2);
+    if (p.sup > 0.8) p.tr.superman = true;
+    p.tr.hands = Math.max(p.tr.hands, p.hands); p.tr.feet = Math.max(p.tr.feet, p.feet);
+
+    const contact = p.airTime < 0.1 ? ground(p.x) - p.y : penetration(p.x, p.y, p.ang, p.crouch);
+    if (contact >= 0) {
+      let th = slope(p.x);
+      // roue avant déjà passée au-delà du sommet de la réception (dans le sens de roulage) : on juge l'angle
+      // par rapport à la pente qui suit le sommet, et si l'angle est bon le vélo continue sur la réception
+      const sg = p.vx < 0 ? -1 : 1, half = 20 * Math.cos(p.ang);
+      const crest = crestBetween(p.x - sg * half, p.x + sg * half);
+      if (crest !== null) {
+        th = Math.atan((ground(crest + sg * 40) - ground(crest)) / (sg * 40));
+        p.x = sg > 0 ? Math.max(p.x, crest + 20 * Math.cos(th)) : Math.min(p.x, crest - 20 * Math.cos(th));
+      }
+      // seule compte l'inclinaison du vélo par rapport au sol ; seuil interpolé entre
+      // « jamais atteignable » (sévérité 0) et la tolérance d'origine (sévérité 1)
+      const tilt = Math.abs(normAng(p.ang - th));
+      const tiltMax = lerp(Math.PI, down ? 0.75 : 0.55, severity);
+      // figure pas terminée, tolérance réglée par la sévérité : écart d'orientation (rotation D/G, tailwhip)
+      // de 20° à 1 jusqu'à 180° (jamais) à 0 ; membres lâchés : 0 toléré à 1, jusqu'à 4 à 0
+      const trickTol = lerp(Math.PI, 0.35, severity);
+      const limbsAllowed = Math.round(4 * (1 - severity));
+      // la rotation D/G peut s'arrêter à un demi-tour : le vélo repart alors dans l'autre sens
+      const halfTurns = Math.round(p.yaw / Math.PI);
+      const unfinished = Math.abs(p.yaw - halfTurns * Math.PI) > trickTol || (p.whipN && Math.abs(normAng(p.whip)) > trickTol)
+                         || Math.abs(normAng(p.bar + p.spin)) > trickTol
+                         || p.hands + Math.max(p.feet, p.sup > 0.3 ? 2 : 0) > limbsAllowed;
+      if (severity > 0 && (tilt > tiltMax || unfinished)) { crash(th); return; }
+      p.y = ground(p.x); p.air = false;
+      p.ang = normAng(p.ang); p.av = 0;
+      // qualité de réception : 1 = vélo parallèle au sol, 0 = à la limite de tolérance d'origine
+      const q = Math.max(0, 1 - tilt / (down ? 0.75 : 0.55));
+      // bonus de vitesse si parallèle : seulement sur un vrai saut, et plein seulement sur une pente descendante
+      const airF = Math.min(1, Math.max(0, (p.airTime - 0.15) / 0.45));
+      const slopeF = Math.min(1, Math.max(0.25, -Math.sin(th) * (p.vx < 0 ? -1 : 1) / 0.25));
+      const gain = LANDING_BONUS * q * q * airF * slopeF;
+      // seule la composante de la vitesse le long du sol est conservée (la composante perpendiculaire est
+      // absorbée par le choc) ; elle peut être négative (le vélo repart en arrière), plus le bonus de réception parallèle
+      p.v = (p.vx * Math.cos(th) + p.vy * Math.sin(th)) * (1 + gain);
+      if (p.airTime > 0.35) {
+        for (let i = 0; i < 10; i++) dust(p.x, p.y, rnd(-80, 80) + p.v * 0.2, rnd(20, 120));
+        const T = 2 * Math.PI;
+        const flips = Math.round(Math.abs(p.rot) / T);
+        const halves = Math.abs(halfTurns);
+        const whips = p.tr.whips + (p.whipN ? Math.round(p.whip / T) : 0);
+        const names = [];
+        if (flips) names.push((p.rot * p.dir > 0 ? 'Backflip' : 'Frontflip') + (flips > 1 ? ' x' + flips : ''));
+        if (halves) names.push(String(halves * 180));
+        if (whips) names.push(['', 'Tailwhip', 'Double tailwhip', 'Triple tailwhip'][Math.min(3, whips)] || whips + ' tailwhips');
+        const spins = p.tr.spins + (p.spinOn ? Math.round(p.spin / T) : 0);
+        if (spins) names.push('Barspin' + (spins > 1 ? ' x' + spins : ''));
+        if (p.tr.xup) names.push('X-up');
+        if (p.tr.hands) names.push(p.tr.hands === 2 ? 'No-hander' : 'One-hander');
+        if (p.tr.superman) names.push('Superman');
+        else if (p.tr.feet) names.push(p.tr.feet === 2 ? 'No-footer' : 'One-footer');
+        const bonus = gain > 0.02 && q > 0.85 ? ' +' + Math.round(gain * 100) + ' %' : '';
+        if (names.length) { msg = names.join(' + ') + ' !' + bonus; msgT = 1.8; }
+        else if (bonus) { msg = 'Réception parfaite !' + bonus; msgT = 1.2; }
+        else if (p.airTime > 0.8) { msg = p.airTime.toFixed(1) + ' s en l\'air'; msgT = 1.2; }
+      }
+      // un nombre impair de demi-tours : le vélo regarde maintenant de l'autre côté
+      if (halfTurns % 2) p.dir = -p.dir;
+      clearTricks();
+    }
+  }
+  // sans pédaler, le pédalier finit son demi-tour et s'arrête pieds à l'horizontale, au même niveau
+  if (p.air || !gasOn()) {
+    const level = Math.ceil(p.crank / Math.PI - 1e-6) * Math.PI;
+    p.crank = Math.min(level, p.crank + 8 * dt);
+  }
+  wantJump = false;
+  p.maxX = Math.max(p.maxX, p.x);
+  while (p.segI + 1 < segStarts.length && segStarts[p.segI + 1] <= p.x) {
+    p.segI++;
+    p.entry = { x: segStarts[p.segI], v: p.air ? p.vx : p.v };
+  }
+}
+
+function update(dt) {
+  const n = 4;
+  for (let i = 0; i < n; i++) step(dt / n);
+  wantJump = false;
+  if (!rampReported && p.x >= rampEndX) {
+    rampReported = true;
+    msg = 'Bas de la rampe : ' + (Math.abs(p.air ? Math.hypot(p.vx, p.vy) : p.v) / PX_PER_M * 3.6).toFixed(0) + ' km/h'; msgT = 2;
+  }
+  for (const q of particles) { q.vy -= G * 0.5 * dt; q.x += q.vx * dt; q.y += q.vy * dt; q.t -= dt; }
+  particles = particles.filter(q => q.t > 0);
+  if (msgT > 0) msgT -= dt;
+  const m = Math.floor((p.maxX - 100) / PX_PER_M);
+  if (m > best) { best = m; try { localStorage.setItem('bmx-best', best); } catch (e) {} }
+  // le pilote est placé au tiers gauche de l'écran en roulant vers la droite, au tiers droit vers la gauche
+  camLead += ((p.dir > 0 ? 0.3 : controlMode === 'touch' ? 0.55 : 0.7) - camLead) * Math.min(1, dt * 2);
+  camX += (p.x - W * camLead - camX) * Math.min(1, dt * 6);
+  camY += (p.y - camY) * Math.min(1, dt * 3);
+}
+
+// ---------- Dessin ----------
+const SY = () => H * 0.6;
+const sx = x => x - camX;
+const sy = y => SY() - (y - camY);
+
+function ik(ax, ay, bx, by, l1, l2, pick) {
+  let dx = bx - ax, dy = by - ay, d = Math.hypot(dx, dy);
+  d = Math.min(d, l1 + l2 - 0.01);
+  const a = (l1 * l1 - l2 * l2 + d * d) / (2 * d);
+  const h = Math.sqrt(Math.max(0, l1 * l1 - a * a));
+  const ux = dx / (Math.hypot(dx, dy) || 1), uy = dy / (Math.hypot(dx, dy) || 1);
+  const mx = ax + ux * a, my = ay + uy * a;
+  const k1 = [mx - uy * h, my + ux * h], k2 = [mx + uy * h, my - ux * h];
+  return pick(k1, k2);
+}
+
+function line(pts) {
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.stroke();
+}
+
+// sxScale < 1 : roue vue de biais (pendant un tailwhip)
+function drawWheel(x, y, sxScale = 1) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(sxScale || 0.02, 1);
+  ctx.beginPath(); ctx.arc(0, 0, WHEEL_R, 0, Math.PI * 2); ctx.stroke();
+  ctx.lineWidth = 1;
+  for (let k = 0; k < 4; k++) {
+    const a = p.wheel * p.dir + k * Math.PI / 4;   // p.dir : le dessin est inversé quand le vélo regarde à gauche
+    line([[-Math.cos(a) * WHEEL_R, Math.sin(a) * WHEEL_R], [Math.cos(a) * WHEEL_R, -Math.sin(a) * WHEEL_R]]);
+  }
+  ctx.restore();
+}
+
+function drawRider() {
+  ctx.save();
+  const a = p.ang + (p.crashed > 0 ? p.crashRot : 0);
+  // pendant une chute, on soulève le dessin pour qu'aucun point ne passe sous la ligne
+  const lift = p.crashed > 0 ? Math.max(0, penetration(p.x, p.y, a, p.crouch)) : 0;
+  ctx.translate(sx(p.x), sy(p.y + lift));
+  ctx.rotate(-a);
+  // 360 : rotation autour de l'axe vertical, vue de côté = écrasement horizontal (miroir à mi-tour)
+  const cy = Math.cos(p.yaw);
+  const cs = cy * p.dir;   // p.dir = -1 : le vélo regarde vers la gauche (dessin en miroir)
+  ctx.scale(Math.abs(cs) < 0.02 ? 0.02 * Math.sign(cs || 1) : cs, 1);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+
+  const c = p.crouch;
+  const L = (a, b) => a + (b - a) * c;
+  const head = [13, -30], bar = [11, -38];
+  // x-up / barspin : la fourche, la roue avant et le guidon tournent autour de la colonne de direction
+  const cf = Math.cos(p.bar + p.spin);
+  const front = [head[0] + (20 - head[0]) * cf, -WHEEL_R];
+  // tailwhip : tout ce qui est derrière la colonne de direction tourne autour d'elle
+  const cw = Math.cos(p.whip);
+  const whipX = pt => [head[0] + (pt[0] - head[0]) * cw, pt[1]];
+  const rear = whipX([-20, -WHEEL_R]), bb = whipX([-3, -10]), seat = whipX([-9, -27]);
+
+  // vélo
+  ctx.strokeStyle = '#2b2b2b'; ctx.lineWidth = 2;
+  drawWheel(...rear, Math.abs(cw)); drawWheel(...front, Math.abs(cf));
+  ctx.strokeStyle = '#c0392b'; ctx.lineWidth = 3;
+  line([rear, bb, head, seat, rear]);
+  line([seat, bb]);
+  line([head, front]);
+  ctx.strokeStyle = '#2b2b2b'; ctx.lineWidth = 2.5;
+  line([head, bar]); line([[bar[0] - 3 * cf, bar[1]], [bar[0] + 3 * cf, bar[1] - 1]]);
+  line([[seat[0] - 5, seat[1] - 2], [seat[0] + 4, seat[1] - 2]]);
+
+  const pedA = [bb[0] + Math.cos(p.crank) * 7 * cw, bb[1] + Math.sin(p.crank) * 7];
+  const pedB = [bb[0] - Math.cos(p.crank) * 7 * cw, bb[1] - Math.sin(p.crank) * 7];
+
+  // pilote (debout, typique BMX ; se baisse avec flèche bas)
+  // superman : le corps s'allonge à l'horizontale derrière le guidon
+  const s = p.sup;
+  const S = (pt, q) => [pt[0] + (q[0] - pt[0]) * s, pt[1] + (q[1] - pt[1]) * s];
+  const hip = S([L(-5, -9), L(-49, -38)], [-22, -47]);
+  const sh = S([L(5, 7), L(-68, -53)], [-4, -49]);
+  const hd = S([L(11, 15), L(-77, -61)], [6, -56]);
+  const legL = 22;
+  const kneeF = (k1, k2) => (k1[0] > k2[0] ? k1 : k2);
+  const elbF = (k1, k2) => (k1[1] > k2[1] ? k1 : k2);
+
+  // pieds : sur les pédales, lâchés (p / p+p) ou repliés pendant un tailwhip
+  const tuck = p.whipN > 0;
+  const footFar = S(tuck ? [hip[0] - 2, hip[1] + 32] : p.feet >= 2 ? [hip[0] + 22, hip[1] + 30] : pedB, [hip[0] - 40, hip[1] + 3]);
+  const footNear = S(tuck ? [hip[0] + 6, hip[1] + 30] : p.feet >= 1 ? [hip[0] - 30, hip[1] + 18] : pedA, [hip[0] - 42, hip[1] - 3]);
+  // mains : sur le guidon, levées (m / m+m), ou écartées pendant qu'on lance le barspin
+  const spinHand = [sh[0] + 14, sh[1] - 8];
+  const handFar = p.hands >= 2 ? [sh[0] + 8, sh[1] - 24] : p.spinOn ? spinHand : bar;
+  const handNear = p.hands >= 1 ? [sh[0] - 12, sh[1] - 24] : p.spinOn ? spinHand : bar;
+
+  // membre arrondi : trait épais aux bouts ronds, plus une main / chaussure ronde au bout
+  const dot = (pt, r, col) => { ctx.fillStyle = col; ctx.beginPath(); ctx.arc(pt[0], pt[1], r, 0, Math.PI * 2); ctx.fill(); };
+  const limb = (a, j, b, w, col) => { ctx.strokeStyle = col; ctx.lineWidth = w; line([a, j, b]); };
+  const shoe = (pt, col) => { ctx.fillStyle = col; ctx.beginPath(); ctx.ellipse(pt[0] + 1.5, pt[1], 4, 2.6, 0, 0, Math.PI * 2); ctx.fill(); };
+  const SKIN = '#e9b98f';
+
+  // côté opposé (plus clair, derrière)
+  limb(hip, ik(hip[0], hip[1], footFar[0], footFar[1], legL, legL, kneeF), footFar, 5.5, '#6b7a8c');
+  shoe(footFar, '#3a3a3a');
+  limb(sh, ik(sh[0], sh[1], handFar[0], handFar[1], 14, 14, elbF), handFar, 4.5, '#5b7fa6');
+  dot(handFar, 2.4, SKIN);
+  // buste au dos légèrement arrondi
+  ctx.strokeStyle = '#1f4e79'; ctx.lineWidth = 9;
+  ctx.beginPath(); ctx.moveTo(hip[0], hip[1]);
+  ctx.quadraticCurveTo((hip[0] + sh[0]) / 2 - 4, (hip[1] + sh[1]) / 2, sh[0], sh[1]); ctx.stroke();
+  // côté visible
+  limb(hip, ik(hip[0], hip[1], footNear[0], footNear[1], legL, legL, kneeF), footNear, 6, '#2c3e50');
+  shoe(footNear, '#222');
+  limb(sh, ik(sh[0], sh[1], handNear[0], handNear[1], 14, 14, elbF), handNear, 5, '#1f4e79');
+  dot(handNear, 2.6, SKIN);
+  // tête ronde et casque
+  ctx.beginPath(); ctx.moveTo(sh[0], sh[1]); ctx.lineTo(hd[0] - 1, hd[1] + 6);
+  ctx.strokeStyle = SKIN; ctx.lineWidth = 4; ctx.stroke(); // cou
+  dot(hd, 8, SKIN);
+  ctx.fillStyle = '#e67e22';
+  ctx.beginPath(); ctx.arc(hd[0] - 0.5, hd[1] - 0.5, 8.8, Math.PI * 0.95, Math.PI * 2.05); ctx.fill(); // casque
+  ctx.fillRect(hd[0] + 4, hd[1] - 2.5, 6, 2); // visière
+  dot([hd[0] + 4.5, hd[1] + 1.5], 1.1, '#222'); // œil
+  ctx.restore();
+}
+
+function draw() {
+  ctx.fillStyle = '#f4efe6'; ctx.fillRect(0, 0, W, H);
+
+  // la piste : une simple ligne
+  ctx.strokeStyle = '#6b4a2b'; ctx.lineWidth = 3; ctx.lineJoin = 'round';
+  ctx.beginPath();
+  const x0 = Math.max(0, Math.floor(camX) - 5);
+  for (let x = x0; x < camX + W + 10; x += 3) {
+    const X = sx(x), Y = sy(ground(x));
+    if (x === x0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
+  }
+  ctx.stroke();
+
+  // repères de distance
+  ctx.fillStyle = '#b8a48c'; ctx.font = '12px system-ui'; ctx.textAlign = 'center';
+  const step = 50 * PX_PER_M;
+  for (let x = Math.ceil(camX / step) * step; x < camX + W; x += step) {
+    const m = Math.round((x - 100) / PX_PER_M);
+    if (m <= 0) continue;
+    const Y = sy(ground(x));
+    ctx.fillRect(sx(x) - 1, Y, 2, 10);
+    ctx.fillText(m + ' m', sx(x), Y + 24);
+  }
+
+  ctx.fillStyle = 'rgba(140,105,70,0.6)';
+  for (const q of particles) ctx.fillRect(sx(q.x) - 1.5, sy(q.y) - 1.5, 3, 3);
+
+  drawRider();
+
+  // HUD
+  const kmh = Math.abs(p.air ? Math.hypot(p.vx, p.vy) : p.v) / PX_PER_M * 3.6;
+  ctx.textAlign = 'left'; ctx.fillStyle = '#333';
+  ctx.font = 'bold 22px system-ui';
+  ctx.fillText(kmh.toFixed(0) + ' km/h', 16, 34);
+  ctx.font = '15px system-ui';
+  ctx.fillText('Distance : ' + Math.max(0, Math.floor((p.maxX - 100) / PX_PER_M)) + ' m   ·   Record : ' + best + ' m', 16, 58);
+  // jauge de détente du saut
+  const ch = jumpCharge();
+  ctx.fillText('Détente', 16, 82);
+  ctx.strokeStyle = '#999'; ctx.lineWidth = 1;
+  ctx.strokeRect(78.5, 71.5, 120, 12);
+  ctx.fillStyle = ch >= 1 ? '#c0392b' : '#e67e22';
+  ctx.fillRect(80, 73, 117 * ch, 9);
+  ctx.fillStyle = '#777'; ctx.font = '13px system-ui';
+  if (controlMode === 'touch') {
+    // les boutons à l'écran suffisent : pas de texte d'aide
+  } else if (controlMode === 'pad' && !padConnected) {
+    ctx.textAlign = 'center'; ctx.font = '15px system-ui';
+    ctx.fillText('Mode manette Bluetooth : associe ta manette dans les réglages Bluetooth, puis appuie sur un bouton.', W / 2, H - 34);
+    ctx.fillText('(PS5 : maintiens PS + Créer jusqu\'au clignotement — PS4 : PS + Share)', W / 2, H - 14);
+    ctx.textAlign = 'left';
+  } else if (padConnected) {
+    ctx.fillText('Manette — figures en l\'air : R1 rotation 360   ·   L1 x-up   ·   stick droit ↑ barspin, ↓ superman   ·   Rond main(s) (2 appuis = deux)   ·   Carré pied(s) (2 appuis = deux)   ·   Triangle tailwhip (2 appuis = double)', 16, H - 34);
+    ctx.fillText('Manette — au sol : R2 pédaler (dans le sens du vélo)   L2 freiner   Croix sauter   ↓ se baisser   ·   En l\'air : R2 / → pivoter horaire   L2 / ← anti-horaire   ·   L1 avancer de 10 m (à l\'arrêt)   ·   Options nouvelle partie   ·   Créer replay', 16, H - 16);
+  } else {
+    ctx.fillText('Figures en l\'air : R rotation autour de l\'axe vertical (maintenir ; 180° = demi-tour)   ·   X x-up (maintenir)   ·   B barspin   ·   M lâcher une main (maintenir ; M+M deux)   ·   P lâcher un pied (maintenir ; P+P deux)   ·   S superman (maintenir)   ·   T tailwhip (T+T double)', 16, H - 52);
+    ctx.fillText('Au sol : pédaler = flèche du côté où regarde le vélo, freiner = l\'autre (R pendant un saut : 180° = repartir vers la gauche)   ↑ sauter (↓ maintenu jusqu\'à 1 s = saut plus haut)   ↓ se baisser (pumper, amortir)   ·   En l\'air : → pivoter horaire   ← pivoter anti-horaire   ·   X avancer de 10 m (à l\'arrêt)   ·   N nouvelle partie   ·   E éditeur de sauts   ·   L replay de la dernière minute', 16, H - 34);
+    ctx.fillText('Manette PlayStation : branche-la (USB ou Bluetooth) puis appuie sur un bouton', 16, H - 16);
+  }
+
+  if (msgT > 0) {
+    ctx.globalAlpha = Math.min(1, msgT * 2);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#c0392b'; ctx.font = 'bold 30px system-ui';
+    ctx.fillText(msg, W / 2, H * 0.22);
+    ctx.globalAlpha = 1;
+  }
+}
+
+// ---------- Éditeur de sauts ----------
+let editorOpen = false;
+const edEl = document.getElementById('editor'), edCv = document.getElementById('edCanvas'), edCtx = edCv.getContext('2d');
+const edName = document.getElementById('edName'), edInfo = document.getElementById('edInfo'), edList = document.getElementById('edList');
+const ED_YMIN = -2, ED_YMAX = 6;   // plage verticale de la zone de tracé (m)
+// Points de contrôle { x, y, sharp } en mètres, triés par x : le premier (0, 0) est fixe,
+// le dernier reste au niveau de la piste (on peut seulement le déplacer en longueur)
+const edDefault = () => [{ x: 0, y: 0 }, { x: 10, y: 0 }];
+let edCtrl = edDefault(), edDrag = -1, edEditId = null;
+const edK = () => edCv.height / (ED_YMAX - ED_YMIN);   // pixels par mètre
+
+function openEditor() {
+  editorOpen = true; edEl.hidden = false;
+  for (const k in keys) keys[k] = false;
+  edResize(); renderLibrary();
+}
+function closeEditor() {
+  editorOpen = false; edEl.hidden = true;
+  regenAhead();   // la piste hors écran est refaite avec la nouvelle bibliothèque
+}
+document.getElementById('edOpen').addEventListener('click', e => { e.currentTarget.blur(); openEditor(); });
+document.getElementById('edClose').addEventListener('click', closeEditor);
+function edResize() { edCv.width = edCv.clientWidth || 800; edDraw(); }
+addEventListener('resize', () => { if (editorOpen) edResize(); });
+
+function edPos(e) {
+  const r = edCv.getBoundingClientRect(), k = edK();
+  const x = (e.clientX - r.left) * (edCv.width / r.width) / k;
+  const y = ED_YMAX - (e.clientY - r.top) * (edCv.height / r.height) / k;
+  return [Math.max(0, x), Math.max(ED_YMIN, Math.min(ED_YMAX, y))];
+}
+// Indice du point de contrôle sous le pointeur (à 10 px près), ou -1
+function edHit(e) {
+  const r = edCv.getBoundingClientRect(), sx = edCv.width / r.width, k = edK();
+  const cx = (e.clientX - r.left) * sx, cy = (e.clientY - r.top) * sx;
+  let best = -1, bd = (IS_TOUCH ? 20 : 10) * sx;   // zone de saisie plus large au doigt
+  edCtrl.forEach((q, i) => {
+    const d = Math.hypot(q.x * k - cx, (ED_YMAX - q.y) * k - cy);
+    if (d < bd) { bd = d; best = i; }
+  });
+  return best;
+}
+
+// Courbe lisse passant par les points (Hermite cubique, tangentes type Catmull-Rom, à plat aux deux bouts
+// pour se raccorder à la piste) ; un point anguleux garde la pente de chaque côté (lèvre d'une bosse d'appel)
+// smoothM : largeur du lissage (m) appliqué ensuite par tronçons, sans traverser les points anguleux
+// ni bouger les extrémités (qui restent au niveau de la piste)
+function splineSample(ctrl, smoothM = 0, step = 0.05) {
+  const n = ctrl.length, sl = i => (ctrl[i + 1].y - ctrl[i].y) / (ctrl[i + 1].x - ctrl[i].x);
+  const tL = [], tR = [];
+  for (let i = 0; i < n; i++) {
+    if (i === 0 || i === n - 1) tL[i] = tR[i] = 0;
+    else if (ctrl[i].sharp) { tL[i] = sl(i - 1); tR[i] = sl(i); }
+    else tL[i] = tR[i] = (ctrl[i + 1].y - ctrl[i - 1].y) / (ctrl[i + 1].x - ctrl[i - 1].x);
+  }
+  const out = [], fixed = [0];   // fixed : indices des échantillons à ne pas lisser (extrémités, points anguleux)
+  for (let i = 0; i < n - 1; i++) {
+    const a = ctrl[i], b = ctrl[i + 1], h = b.x - a.x;
+    const steps = Math.max(1, Math.ceil(h / step));
+    if (i > 0 && a.sharp) fixed.push(out.length);
+    for (let s = 0; s < steps; s++) {
+      const t = s / steps, t2 = t * t, t3 = t2 * t;
+      const y = (2 * t3 - 3 * t2 + 1) * a.y + (t3 - 2 * t2 + t) * h * tR[i] + (-2 * t3 + 3 * t2) * b.y + (t3 - t2) * h * tL[i + 1];
+      out.push([a.x + h * t, y]);
+    }
+  }
+  out.push([ctrl[n - 1].x, ctrl[n - 1].y]);
+  fixed.push(out.length - 1);
+  // lissage : moyenne glissante (3 passes ≈ gaussienne), fenêtre réduite près des points fixes pour les garder intacts
+  const w = Math.round(smoothM / 2 / step);
+  for (let pass = 0; pass < (w > 0 ? 3 : 0); pass++) {
+    const y0 = out.map(q => q[1]);
+    for (let f = 0; f < fixed.length - 1; f++) {
+      const A = fixed[f], B = fixed[f + 1];
+      for (let i = A + 1; i < B; i++) {
+        const r = Math.min(w, i - A, B - i);
+        let s = 0;
+        for (let k = i - r; k <= i + r; k++) s += y0[k];
+        out[i][1] = s / (2 * r + 1);
+      }
+    }
+  }
+  return out.map(([x, y]) => [Math.round(x * 1000) / 1000, Math.round(y * 1000) / 1000]);
+}
+
+// outils pour le tactile (pas de double-clic ni de clic droit) : « sharp » bascule lisse/anguleux, « del » supprime
+let edTool = 'move';
+for (const b of document.querySelectorAll ? document.querySelectorAll('#edTools .btn') : []) {
+  b.addEventListener('click', () => {
+    edTool = b.dataset.tool;
+    for (const o of document.querySelectorAll('#edTools .btn')) o.classList.toggle('on', o === b);
+  });
+}
+edCv.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return;
+  const i = edHit(e);
+  if (edTool !== 'move') {
+    if (i > 0 && i < edCtrl.length - 1) {
+      if (edTool === 'sharp') edCtrl[i].sharp = !edCtrl[i].sharp; else edCtrl.splice(i, 1);
+      edDraw();
+    }
+    return;
+  }
+  if (i >= 0) edDrag = i;
+  else {
+    // clic dans le vide : nouveau point ; au-delà de la fin, le saut s'allonge
+    const [x, y] = edPos(e), end = edCtrl[edCtrl.length - 1];
+    if (x < 0.1) return;
+    if (x > end.x - 0.1) end.x = x + 1.5;
+    const j = edCtrl.findIndex(q => q.x > x);
+    edCtrl.splice(j, 0, { x, y });
+    edDrag = j;
+  }
+  edCv.setPointerCapture(e.pointerId); edDraw();
+});
+edCv.addEventListener('pointermove', e => {
+  if (edDrag < 0) { edCv.style.cursor = edHit(e) >= 0 ? 'grab' : 'crosshair'; return; }
+  const i = edDrag, n = edCtrl.length, [x, y] = edPos(e);
+  if (i === 0) return;   // le départ est fixe
+  const q = edCtrl[i], prev = edCtrl[i - 1].x + 0.1;
+  if (i === n - 1) { q.x = Math.max(edCtrl[i - 1].x + 0.5, x); }   // la fin ne bouge qu'en longueur
+  else { q.x = Math.min(edCtrl[i + 1].x - 0.1, Math.max(prev, x)); q.y = y; }
+  edDraw();
+});
+for (const ev of ['pointerup', 'pointercancel']) edCv.addEventListener(ev, () => { edDrag = -1; });
+edCv.addEventListener('dblclick', e => {
+  const i = edHit(e);
+  if (i > 0 && i < edCtrl.length - 1) { edCtrl[i].sharp = !edCtrl[i].sharp; edDraw(); }
+});
+edCv.addEventListener('contextmenu', e => {
+  e.preventDefault();
+  const i = edHit(e);
+  if (i > 0 && i < edCtrl.length - 1) { edCtrl.splice(i, 1); edDraw(); }
+});
+
+function edDraw() {
+  const c = edCtx, w = edCv.width, h = edCv.height, k = edK();
+  const X = x => x * k, Y = y => (ED_YMAX - y) * k;
+  c.clearRect(0, 0, w, h);
+  c.lineWidth = 1; c.strokeStyle = '#eee5d8'; c.fillStyle = '#9a8a76'; c.font = '11px system-ui';
+  for (let m = 0; m <= w / k; m++) {
+    c.beginPath(); c.moveTo(X(m) + 0.5, 0); c.lineTo(X(m) + 0.5, h); c.stroke();
+    if (m % 2 === 0 && m) c.fillText(m + ' m', X(m) + 3, h - 4);
+  }
+  for (let m = ED_YMIN; m <= ED_YMAX; m++) {
+    c.beginPath(); c.moveTo(0, Y(m) + 0.5); c.lineTo(w, Y(m) + 0.5); c.stroke();
+    if (m) c.fillText(m + ' m', 3, Y(m) - 3);
+  }
+  c.strokeStyle = '#b8a48c'; c.lineWidth = 2;
+  c.beginPath(); c.moveTo(0, Y(0)); c.lineTo(w, Y(0)); c.stroke();
+  // polygone des points (pointillés), courbe, puis les points : rond = lisse, carré = anguleux, gris = extrémités
+  c.setLineDash([4, 4]); c.strokeStyle = '#d3c4ae'; c.lineWidth = 1;
+  c.beginPath(); edCtrl.forEach((q, i) => i ? c.lineTo(X(q.x), Y(q.y)) : c.moveTo(X(q.x), Y(q.y))); c.stroke();
+  c.setLineDash([]);
+  const pts = splineSample(edCtrl, edSmoothM());
+  c.strokeStyle = '#6b4a2b'; c.lineWidth = 3; c.lineJoin = 'round';
+  c.beginPath(); pts.forEach(([x, y], i) => i ? c.lineTo(X(x), Y(y)) : c.moveTo(X(x), Y(y))); c.stroke();
+  edCtrl.forEach((q, i) => {
+    const end = i === 0 || i === edCtrl.length - 1;
+    c.fillStyle = end ? '#9a8a76' : '#e67e22'; c.strokeStyle = '#fff'; c.lineWidth = 2;
+    c.beginPath();
+    if (q.sharp) c.rect(X(q.x) - 6, Y(q.y) - 6, 12, 12); else c.arc(X(q.x), Y(q.y), 6, 0, Math.PI * 2);
+    c.fill(); c.stroke();
+  });
+  const Hm = Math.max(...pts.map(q => q[1])), Lo = Math.min(...pts.map(q => q[1]));
+  edInfo.textContent = `Longueur ${edCtrl[edCtrl.length - 1].x.toFixed(1)} m · hauteur max ${Hm.toFixed(1)} m`
+    + (Lo < -0.05 ? ` · creux ${(-Lo).toFixed(1)} m` : '') + ` · ${edCtrl.length - 2} point(s) de contrôle`;
+}
+
+const edSaveBtn = document.getElementById('edSave');
+const edSmooth = document.getElementById('edSmooth'), edSmoothVal = document.getElementById('edSmoothVal');
+const ED_SMOOTH_DEFAULT = 0.6;
+const edSmoothM = () => +edSmooth.value;
+function edSetSmooth(v) { edSmooth.value = v; edSmoothVal.textContent = (+v).toFixed(1).replace('.', ',') + ' m'; }
+edSmooth.addEventListener('input', () => { edSetSmooth(edSmooth.value); edDraw(); });
+edSetSmooth(ED_SMOOTH_DEFAULT);
+function edReset() {
+  edCtrl = edDefault(); edEditId = null; edName.value = ''; edSetSmooth(ED_SMOOTH_DEFAULT);
+  edSaveBtn.textContent = 'Ajouter à la bibliothèque'; edDraw();
+}
+// Ouvre un saut tracé dans l'éditeur (les anciens tracés à main levée sont convertis en points tous les ~0,75 m)
+function edLoad(e) {
+  let ctrl = e.ctrl;
+  if (!ctrl) {
+    ctrl = [{ x: 0, y: 0 }];
+    for (const [x, y] of e.pts) if (x - ctrl[ctrl.length - 1].x >= 0.75) ctrl.push({ x, y });
+    ctrl[ctrl.length - 1].y = 0;
+  }
+  edCtrl = ctrl.map(q => ({ ...q })); edEditId = e.id; edName.value = e.name;
+  edSetSmooth(e.smooth ?? 0);
+  edSaveBtn.textContent = 'Enregistrer les modifications'; edDraw();
+}
+document.getElementById('edClear').addEventListener('click', edReset);
+edSaveBtn.addEventListener('click', () => {
+  if (edCtrl[edCtrl.length - 1].x < 1) { edInfo.textContent = 'Le saut doit faire au moins 1 m de long.'; return; }
+  const smooth = edSmoothM(), pts = splineSample(edCtrl, smooth), ctrl = edCtrl.map(q => ({ ...q }));
+  const old = edEditId && library.find(e => e.id === edEditId);
+  const name = edName.value.trim() || (old ? old.name : 'Saut ' + (library.filter(e => e.type === 'drawn').length + 1));
+  if (old) Object.assign(old, { name, pts, ctrl, smooth });
+  else library.push({ id: 'd' + Date.now(), name, type: 'drawn', pts, ctrl, smooth, scale: 1 });
+  saveLibrary(); renderLibrary(); edReset();
+  edInfo.textContent = '« ' + name + ' » ' + (old ? 'modifié.' : 'ajouté à la bibliothèque.');
+});
+document.getElementById('edRestore').addEventListener('click', () => {
+  const missing = DEFAULT_LIBRARY.filter(d => !library.some(e => e.id === d.id)).map(d => ({ ...d }));
+  library = [...missing, ...library];
+  saveLibrary(); renderLibrary();
+});
+
+function drawThumb(cnv, e) {
+  cnv.width = cnv.clientWidth || 260; cnv.height = 60;
+  const c = cnv.getContext('2d'), prof = sampleProfile(e);
+  const L = prof.length, hi = Math.max(0, ...prof), lo = Math.min(0, ...prof);
+  const k = Math.min((cnv.width - 8) / L, (cnv.height - 10) / ((hi - lo) || 1));
+  const Y = y => cnv.height - 5 - (y - lo) * k;
+  c.strokeStyle = '#d8cdbd'; c.lineWidth = 1;
+  c.beginPath(); c.moveTo(0, Y(0)); c.lineTo(cnv.width, Y(0)); c.stroke();
+  c.strokeStyle = '#6b4a2b'; c.lineWidth = 2;
+  c.beginPath();
+  for (let i = 0; i < L; i += 2) { const x = 4 + i * k; i ? c.lineTo(x, Y(prof[i])) : c.moveTo(x, Y(prof[i])); }
+  c.stroke();
+  return [L / PX_PER_M, hi / PX_PER_M];
+}
+
+function renderLibrary() {
+  edList.innerHTML = '';
+  if (!library.length) edList.innerHTML = '<p class="ed-help">Bibliothèque vide : la piste ne sera faite que de parties plates.</p>';
+  for (const e of library) {
+    const item = document.createElement('div');
+    item.className = 'ed-item';
+    item.innerHTML = `<div class="top"><span class="name"></span><span>${e.type === 'drawn' ? '<button class="btn edit">Modifier</button> ' : ''}<button class="btn danger">Supprimer</button></span></div>
+      <div class="meta"></div><canvas></canvas>
+      <label>Échelle <input type="range" min="0.25" max="3" step="0.05"> <b></b></label>`;
+    item.querySelector('.name').textContent = e.name;
+    const meta = item.querySelector('.meta'), cnv = item.querySelector('canvas');
+    const range = item.querySelector('input'), val = item.querySelector('b');
+    edList.appendChild(item);
+    const refresh = () => {
+      val.textContent = '×' + e.scale.toFixed(2);
+      const [L, Hm] = drawThumb(cnv, e);
+      meta.textContent = e.type === 'proc'
+        ? 'Saut d\'origine, réglé aussi par les curseurs (exemple : ' + L.toFixed(1) + ' m)'
+        : 'Tracé · ' + L.toFixed(1) + ' m de long · ' + Hm.toFixed(1) + ' m de haut';
+    };
+    range.value = e.scale;
+    range.addEventListener('input', () => { e.scale = +range.value; refresh(); });
+    range.addEventListener('change', saveLibrary);
+    item.querySelector('.edit')?.addEventListener('click', () => edLoad(e));
+    item.querySelector('.danger').addEventListener('click', () => {
+      if (e.type === 'drawn' && !confirm('Supprimer « ' + e.name + ' » ? Un saut tracé ne peut pas être récupéré.')) return;
+      library = library.filter(x => x !== e);
+      saveLibrary(); renderLibrary();
+    });
+    refresh();
+  }
+}
+
+// ---------- Replay de la dernière minute ----------
+// chaque image jouée est enregistrée (état du pilote, caméra, message, poussière) dans un tampon de 60 s
+const REPLAY_SECONDS = 60;
+let rec = [], recDur = 0, replay = null;   // replay : { i, acc, paused, slow }
+function recordFrame(dt) {
+  rec.push({ dt, p: { ...p }, camX, camY, msg, msgT, particles: particles.map(q => ({ ...q })) });
+  recDur += dt;
+  while (recDur > REPLAY_SECONDS && rec.length > 1) recDur -= rec.shift().dt;
+}
+function toggleReplay() {
+  if (replay) { replay = null; return; }
+  if (editorOpen || rec.length < 30) return;
+  for (const k in keys) keys[k] = false;
+  replay = { i: 0, acc: 0, paused: false, slow: false };
+}
+// déplace la lecture de s secondes (négatif = en arrière)
+function replaySeek(s) {
+  let i = replay.i;
+  if (s > 0) { for (let t = 0; t < s && i < rec.length - 1; i++) t += rec[i].dt; }
+  else { for (let t = 0; t < -s && i > 0; i--) t += rec[i - 1].dt; }
+  replay.i = i; replay.acc = 0;
+}
+// touches du replay ; renvoie true si la touche a été prise en compte
+function replayKey(e) {
+  if (e.key === 'Escape') { replay = null; return true; }
+  if (e.key === ' ') { e.preventDefault(); replay.paused = !replay.paused; return true; }
+  if (e.key === 'ArrowLeft') { e.preventDefault(); replaySeek(-5); return true; }
+  if (e.key === 'ArrowRight') { e.preventDefault(); replaySeek(5); return true; }
+  if (e.key === 'ArrowDown') { e.preventDefault(); replay.slow = !replay.slow; return true; }
+  if (e.key.startsWith('Arrow')) { e.preventDefault(); return true; }
+  return false;
+}
+function stepReplay(dt) {
+  if (replay.paused) return;
+  replay.acc += dt * (replay.slow ? 0.25 : 1);
+  while (replay.i < rec.length - 1 && replay.acc >= rec[replay.i].dt) { replay.acc -= rec[replay.i].dt; replay.i++; }
+  if (replay.i >= rec.length - 1) replay = null;   // fin du replay : retour au jeu là où on l'avait laissé
+}
+function drawReplay() {
+  const f = rec[replay.i];
+  const saved = [p, camX, camY, msg, msgT, particles];
+  [p, camX, camY, msg, msgT, particles] = [f.p, f.camX, f.camY, f.msg, f.msgT, f.particles];
+  draw();
+  [p, camX, camY, msg, msgT, particles] = saved;
+  // bandeau du replay
+  let remain = 0;
+  for (let i = replay.i; i < rec.length; i++) remain += rec[i].dt;
+  const bw = Math.min(420, W - 32), bx = (W - bw) / 2, by = 14;
+  ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.strokeStyle = '#d8cdbd'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.roundRect(bx, by, bw, 62, 8); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#c0392b';
+  ctx.beginPath(); ctx.arc(bx + 18, by + 18, 6, 0, Math.PI * 2); ctx.fill();
+  ctx.textAlign = 'left'; ctx.font = 'bold 15px system-ui';
+  ctx.fillText('REPLAY' + (replay.paused ? ' — pause' : replay.slow ? ' — ralenti ×0,25' : ''), bx + 32, by + 23);
+  ctx.textAlign = 'right'; ctx.fillStyle = '#333'; ctx.font = '13px system-ui';
+  ctx.fillText('−' + Math.floor(remain / 60) + ':' + String(Math.floor(remain % 60)).padStart(2, '0'), bx + bw - 12, by + 23);
+  ctx.fillStyle = '#e7ddcf'; ctx.fillRect(bx + 12, by + 32, bw - 24, 5);
+  ctx.fillStyle = '#e67e22'; ctx.fillRect(bx + 12, by + 32, (bw - 24) * replay.i / Math.max(1, rec.length - 1), 5);
+  ctx.textAlign = 'center'; ctx.fillStyle = '#777'; ctx.font = '11px system-ui';
+  ctx.fillText('L / Échap : quitter   ·   Espace : pause   ·   ← → : 5 s   ·   ↓ : ralenti', bx + bw / 2, by + 54);
+}
+
+// ---------- Choix des commandes : clavier, tactile (smartphone) ou manette Bluetooth ----------
+const $ = id => document.getElementById(id);
+const IS_TOUCH = (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches)
+  || (typeof window !== 'undefined' && 'ontouchstart' in window);
+let controlMode = IS_TOUCH ? 'touch' : 'keyboard', panelOpen = false;
+try { const s = localStorage.getItem('bmx-controls'); if (s === 'keyboard' || s === 'touch' || s === 'pad') controlMode = s; } catch (e) {}
+const touchLayer = $('touch'), menuBtn = $('menuBtn'), panel = $('tol'), ctrlSel = $('ctrlMode');
+const padStatus = $('padStatus'), padHelp = $('padHelp'), replayBar = $('replayBar');
+
+// chaque bouton tactile se comporte comme une touche maintenue ; plusieurs doigts en même temps sont gérés
+const touchBtns = document.querySelectorAll ? [...document.querySelectorAll('.tb')] : [];
+for (const b of touchBtns) {
+  const key = b.dataset.key;
+  let id = null;
+  b.release = () => { if (id !== null) { id = null; keys[key] = false; b.classList.remove('on'); } };
+  b.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    if (id !== null) return;
+    id = e.pointerId;
+    if (b.setPointerCapture) b.setPointerCapture(e.pointerId);
+    b.classList.add('on');
+    keyDown(key, false, performance.now());
+  });
+  for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) b.addEventListener(ev, e => { if (e.pointerId === id) b.release(); });
+  b.addEventListener('contextmenu', e => e.preventDefault());
+}
+// si la page perd le focus, on relâche tout
+function releaseAll() { for (const k in keys) keys[k] = false; for (const b of touchBtns) b.release(); }
+addEventListener('blur', releaseAll);
+if (typeof document.addEventListener === 'function') document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
+
+function setControlMode(m) {
+  controlMode = m; ctrlSel.value = m;
+  try { localStorage.setItem('bmx-controls', m); } catch (e) {}
+  applyControlUI();
+}
+function applyControlUI() {
+  document.body.classList.toggle('touchmode', IS_TOUCH);
+  menuBtn.hidden = !IS_TOUCH;
+  panel.classList.toggle('collapsed', IS_TOUCH && !panelOpen);
+  padHelp.hidden = controlMode !== 'pad';
+  syncTouchUI(true);
+}
+ctrlSel.addEventListener('change', () => { ctrlSel.blur(); setControlMode(ctrlSel.value); });
+menuBtn.addEventListener('click', () => { panelOpen = !panelOpen; menuBtn.blur(); applyControlUI(); });
+function closePanel() { if (IS_TOUCH) { panelOpen = false; applyControlUI(); } }
+$('bNew').addEventListener('click', e => { e.currentTarget.blur(); reset(); closePanel(); });
+$('bReplay').addEventListener('click', e => { e.currentTarget.blur(); toggleReplay(); closePanel(); });
+$('bFull').addEventListener('click', e => {
+  e.currentTarget.blur();
+  const el = document.documentElement;
+  if (document.fullscreenElement) { document.exitFullscreen(); return; }
+  const req = el.requestFullscreen || el.webkitRequestFullscreen;
+  if (req) Promise.resolve(req.call(el)).then(() => { if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {}); }).catch(() => {});
+  closePanel();
+});
+// barre du replay (équivalent des touches Espace, ← →, ↓ et Échap)
+const rbKey = (id, key) => $(id).addEventListener('click', e => { e.currentTarget.blur(); if (replay) replayKey({ key, preventDefault() {} }); });
+rbKey('rbPause', ' '); rbKey('rbBack', 'ArrowLeft'); rbKey('rbFwd', 'ArrowRight'); rbKey('rbSlow', 'ArrowDown'); rbKey('rbQuit', 'Escape');
+
+// met à jour ce qui change à l'écran : couche tactile, libellés, état de la manette
+let uiState = '', padState = '';
+function syncTouchUI(force) {
+  const showTouch = controlMode === 'touch' && !replay && !editorOpen;
+  const st = [showTouch, !!replay, p.air].join();
+  if (force || st !== uiState) {
+    uiState = st;
+    touchLayer.hidden = !showTouch;
+    if (!showTouch) for (const b of touchBtns) b.release();
+    replayBar.hidden = !replay || !IS_TOUCH;
+    touchLayer.classList.toggle('air', !!p.air);
+    // en l'air, les deux gros boutons font pivoter le vélo
+    $('tbGas').textContent = p.air ? '↻' : 'PÉDALER';
+    $('tbBrake').textContent = p.air ? '↺' : 'FREIN';
+  }
+  const ps = padConnected ? 'ok' : 'no';
+  if (ps !== padState) {
+    padState = ps;
+    padStatus.textContent = padConnected ? 'Manette détectée ✓' : 'Aucune manette détectée';
+    padStatus.classList.toggle('ok', padConnected);
+  }
+}
+ctrlSel.value = controlMode;
+
+reset();
+applyControlUI();
+let last = performance.now();
+function loop(t) {
+  const dt = Math.min(0.033, (t - last) / 1000);
+  last = t;
+  if (replay) { pollGamepad(); stepReplay(dt); }
+  // jeu en pause pendant l'édition et le replay
+  else if (!editorOpen) { pollGamepad(); update(dt); recordFrame(dt); }
+  syncTouchUI();
+  if (replay) drawReplay(); else draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
