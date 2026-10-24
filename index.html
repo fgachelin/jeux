@@ -10,11 +10,12 @@
   html, body { margin: 0; height: 100%; overflow: hidden; background: #f4efe6; font-family: system-ui, sans-serif;
                overscroll-behavior: none; touch-action: none; -webkit-user-select: none; user-select: none; }
   canvas { display: block; touch-action: none; }
-  #tol { position: fixed; top: 14px; right: 16px; background: rgba(255,255,255,0.75); border: 1px solid #d8cdbd;
+  #tol { position: fixed; top: 56px; right: 16px; background: rgba(255,255,255,0.75); border: 1px solid #d8cdbd;
          border-radius: 8px; padding: 8px 12px; font-size: 13px; color: #333; z-index: 6;
-         max-height: calc(100vh - 28px); overflow-y: auto; touch-action: pan-y; }
+         max-height: calc(100vh - 70px); overflow-y: auto; touch-action: pan-y; }
   body.touchmode #tol { top: 56px; background: rgba(255,255,255,0.95); max-height: calc(100vh - 70px); }
   #tol.collapsed { display: none; }
+  #tolClose { float: right; margin: 0 0 4px 8px; padding: 2px 9px; line-height: 1.2; }
   #tol select { font: inherit; font-size: 13px; padding: 3px 4px; border-radius: 6px; border: 1px solid #c9b9a3; max-width: 190px; }
   #tol .btnrow { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 2px; }
   #tol .btnrow .btn { flex: 1 1 auto; }
@@ -175,15 +176,16 @@
 </div>
 
 <div id="tol">
+  <button class="btn" id="tolClose" aria-label="Fermer les réglages" hidden>✕</button>
   <label>Commandes<br>
   <select id="ctrlMode">
     <option value="keyboard">Clavier</option>
     <option value="touch">Tactile (smartphone)</option>
-    <option value="pad">Manette Bluetooth</option>
+    <option value="pad">Manette</option>
   </select></label>
   <div id="padStatus" class="hint"></div>
   <div class="help" id="padHelp" hidden>Manette PS5 : maintiens PS + Créer jusqu'au clignotement ; PS4 : PS + Share.
-    Associe-la dans les réglages Bluetooth du téléphone, puis appuie sur un bouton. Elle marche aussi sur PC.</div>
+    Connecte-la, puis appuie sur un bouton. Elle marche aussi sur PC.</div>
   <div class="btnrow">
     <button class="btn" id="bPadCfg" tabindex="-1">Configurer la manette</button>
     <button class="btn" id="bPadReset" tabindex="-1">Manette par défaut</button>
@@ -1101,7 +1103,7 @@ function draw() {
     // les boutons à l'écran suffisent : pas de texte d'aide
   } else if (controlMode === 'pad' && !padConnected) {
     ctx.textAlign = 'center'; ctx.font = '15px system-ui';
-    ctx.fillText('Mode manette Bluetooth : associe ta manette dans les réglages Bluetooth, puis appuie sur un bouton.', W / 2, H - 34);
+    ctx.fillText('Mode manette : connecte ta manette, puis appuie sur un bouton.', W / 2, H - 34);
     ctx.fillText('(PS5 : maintiens PS + Créer jusqu\'au clignotement — PS4 : PS + Share)', W / 2, H - 14);
     ctx.textAlign = 'left';
   } else if (padConnected) {
@@ -1110,7 +1112,7 @@ function draw() {
   } else {
     ctx.fillText('Figures en l\'air : R rotation autour de l\'axe vertical (maintenir ; 180° = demi-tour)   ·   X x-up (maintenir)   ·   B barspin   ·   M lâcher une main (maintenir ; M+M deux)   ·   P lâcher un pied (maintenir ; P+P deux)   ·   S superman (maintenir)   ·   T tailwhip (T+T double)', 16, H - 52);
     ctx.fillText('Au sol : pédaler = flèche du côté où regarde le vélo, freiner = l\'autre (R pendant un saut : 180° = repartir vers la gauche)   ↑ sauter (↓ maintenu jusqu\'à 1 s = saut plus haut)   ↓ se baisser (pumper, amortir)   ·   En l\'air : → pivoter horaire   ← pivoter anti-horaire   ·   X avancer de 10 m (à l\'arrêt)   ·   N nouvelle partie   ·   E éditeur de sauts   ·   L replay de la dernière minute', 16, H - 34);
-    ctx.fillText('Manette PlayStation : branche-la (USB ou Bluetooth) puis appuie sur un bouton', 16, H - 16);
+    ctx.fillText('Manette PlayStation : connecte-la puis appuie sur un bouton', 16, H - 16);
   }
 
   if (msgT > 0) {
@@ -1440,12 +1442,12 @@ function drawReplay() {
   ctx.fillText('L / Échap : quitter   ·   Espace : pause   ·   ← → : 5 s   ·   ↓ : ralenti', bx + bw / 2, by + 54);
 }
 
-// ---------- Choix des commandes : clavier, tactile (smartphone) ou manette Bluetooth ----------
+// ---------- Choix des commandes : clavier, tactile (smartphone) ou manette ----------
 const $ = id => document.getElementById(id);
 // tactile seulement si l'appareil a vraiment un écran tactile (une TV Android déclare parfois un pointeur « coarse »)
 const IS_TOUCH = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
   && ((typeof navigator !== 'undefined' && navigator.maxTouchPoints) | 0) > 0;
-let controlMode = IS_TOUCH ? 'touch' : 'keyboard', panelOpen = false, userChoseMode = false;
+let controlMode = IS_TOUCH ? 'touch' : 'keyboard', panelOpen = !IS_TOUCH, userChoseMode = false;
 try {
   const s = localStorage.getItem('bmx-controls');
   if (s === 'keyboard' || s === 'touch' || s === 'pad') { controlMode = s; userChoseMode = true; }
@@ -1483,14 +1485,16 @@ function setControlMode(m, save = true) {
 }
 function applyControlUI() {
   document.body.classList.toggle('touchmode', IS_TOUCH);
-  menuBtn.hidden = !IS_TOUCH && controlMode !== 'pad';
-  panel.classList.toggle('collapsed', (IS_TOUCH || controlMode === 'pad') && !panelOpen);
+  menuBtn.hidden = false;
+  $('tolClose').hidden = false;
+  panel.classList.toggle('collapsed', !panelOpen);
   padHelp.hidden = controlMode !== 'pad';
   syncTouchUI(true);
 }
 ctrlSel.addEventListener('change', () => { ctrlSel.blur(); setControlMode(ctrlSel.value); });
 menuBtn.addEventListener('click', () => { panelOpen = !panelOpen; menuBtn.blur(); applyControlUI(); });
 function closePanel() { if (IS_TOUCH || controlMode === 'pad') { panelOpen = false; applyControlUI(); } }
+$('tolClose').addEventListener('click', e => { e.currentTarget.blur(); panelOpen = false; applyControlUI(); });
 $('bNew').addEventListener('click', e => { e.currentTarget.blur(); reset(); closePanel(); });
 $('bReplay').addEventListener('click', e => { e.currentTarget.blur(); toggleReplay(); closePanel(); });
 $('bFull').addEventListener('click', e => {
