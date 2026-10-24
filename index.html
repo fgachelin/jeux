@@ -56,6 +56,20 @@
   #replayBar[hidden] { display: none; }
   #replayBar .btn { min-width: 48px; min-height: 44px; font-size: 16px; }
 
+  /* assistant de configuration de la manette */
+  #padCfg { position: fixed; inset: 0; z-index: 15; display: flex; align-items: center; justify-content: center;
+            background: rgba(244,239,230,0.94); }
+  #padCfg[hidden] { display: none; }
+  #padCfg .box { background: #fff; border: 1px solid #d8cdbd; border-radius: 12px; padding: 16px 20px; width: min(560px, 92vw);
+                 color: #333; text-align: center; }
+  #padCfg h3 { margin: 0 0 10px; font-size: 18px; }
+  #padCfg .prog { height: 6px; background: #e7ddcf; border-radius: 3px; overflow: hidden; margin-bottom: 14px; }
+  #cfgProg { height: 100%; width: 0; background: #e67e22; }
+  #padCfg .act { font: 700 22px system-ui; margin: 6px 0; min-height: 2.4em; }
+  #padCfg .tip { color: #777; font-size: 13px; margin: 4px 0; }
+  #padCfg .msg { color: #c0392b; font-size: 14px; min-height: 1.3em; margin: 6px 0; }
+  #padCfg .btnrow { display: flex; gap: 8px; justify-content: center; margin: 10px 0; }
+
   /* consigne en mode portrait */
   #rotate { position: fixed; inset: 0; z-index: 20; display: none; align-items: center; justify-content: center;
             text-align: center; background: rgba(244,239,230,0.97); color: #4a3b2a; font: 600 20px system-ui; padding: 24px; }
@@ -144,6 +158,22 @@
 </div>
 <div id="rotate">Tourne ton téléphone en mode paysage ↻</div>
 
+<div id="padCfg" hidden>
+  <div class="box">
+    <h3>Configuration de la manette</h3>
+    <div class="prog"><div id="cfgProg"></div></div>
+    <p id="cfgAction" class="act"></p>
+    <p id="cfgTip" class="tip"></p>
+    <p id="cfgMsg" class="msg"></p>
+    <div class="btnrow">
+      <button class="btn" id="cfgBack" tabindex="-1">Précédent</button>
+      <button class="btn" id="cfgSkip" tabindex="-1">Passer</button>
+      <button class="btn" id="cfgCancel" tabindex="-1">Annuler</button>
+    </div>
+    <p class="tip">Évite la croix directionnelle et les boutons ✕ ○ □ △ si ton navigateur les utilise pour son menu.</p>
+  </div>
+</div>
+
 <div id="tol">
   <label>Commandes<br>
   <select id="ctrlMode">
@@ -154,6 +184,10 @@
   <div id="padStatus" class="hint"></div>
   <div class="help" id="padHelp" hidden>Manette PS5 : maintiens PS + Créer jusqu'au clignotement ; PS4 : PS + Share.
     Associe-la dans les réglages Bluetooth du téléphone, puis appuie sur un bouton. Elle marche aussi sur PC.</div>
+  <div class="btnrow">
+    <button class="btn" id="bPadCfg" tabindex="-1">Configurer la manette</button>
+    <button class="btn" id="bPadReset" tabindex="-1">Manette par défaut</button>
+  </div>
   <div class="btnrow">
     <button class="btn" id="bNew">Nouvelle partie</button>
     <button class="btn" id="bReplay">Replay</button>
@@ -507,6 +541,8 @@ function keyDown(key, repeat, time) {
 addEventListener('keydown', e => {
   if (editorOpen) { if (e.key === 'Escape') closeEditor(); return; }
   if (replay && replayKey(e)) return;
+  // manette configurée : les touches que le navigateur fabrique à partir des boutons de la manette sont ignorées
+  if (controlMode === 'pad' && padCustom) { if (e.key !== 'Escape' && e.key !== 'F5') e.preventDefault(); return; }
   if (e.key === 'e' || e.key === 'E') { openEditor(); return; }
   if (e.key.startsWith('Arrow')) e.preventDefault();
   keyDown(e.key, e.repeat, e.timeStamp);
@@ -534,10 +570,43 @@ const PAD_MAP = [
 ];
 const padHeld = {};
 let padConnected = false;
+
+// Manette configurée par le joueur (bouton « Configurer la manette ») : remplace la disposition ci-dessus.
+// Chaque action est liée à une entrée : { t: 'b', i } = bouton i, { t: 'a', i, s, base } = axe i (gâchette, stick) dans le sens s
+const PAD_ACTIONS = [
+  { key: 'PadGas',    label: 'Pédaler (dans le sens du vélo) · en l\'air : pivoter ↻', tip: 'gâchette droite (R2)' },
+  { key: 'PadBrake',  label: 'Freiner · en l\'air : pivoter ↺',                         tip: 'gâchette gauche (L2)' },
+  { key: 'ArrowUp',   label: 'Sauter',                                                   tip: 'bouton R1' },
+  { key: 'ArrowDown', label: 'Se baisser (pomper, charger la détente)',                  tip: 'bouton L1' },
+  { key: 'r',         label: 'Rotation 360° (maintenir)',                                tip: 'stick gauche vers le haut' },
+  { key: 'x',         label: 'X-up (maintenir) · à l\'arrêt : avancer de 10 m',          tip: 'stick gauche vers le bas' },
+  { key: 'b',         label: 'Barspin',                                                  tip: 'stick droit vers le haut' },
+  { key: 's',         label: 'Superman (maintenir)',                                     tip: 'stick droit vers le bas' },
+  { key: 'm',         label: 'Lâcher une main (deux appuis rapides = deux mains)',       tip: 'stick droit vers la gauche' },
+  { key: 'p',         label: 'Lâcher un pied (deux appuis rapides = deux pieds)',        tip: 'stick droit vers la droite' },
+  { key: 't',         label: 'Tailwhip (deux appuis rapides = double)',                  tip: 'bouton R3 (clic du stick droit)' },
+  { key: 'l',         label: 'Replay de la dernière minute',                             tip: 'bouton L3 (clic du stick gauche)' },
+  { key: 'n',         label: 'Nouvelle partie',                                          tip: 'bouton Options' },
+];
+let padCustom = null;
+try { const s = JSON.parse(localStorage.getItem('bmx-padmap')); if (s && typeof s === 'object') padCustom = s; } catch (e) {}
+const specOn = (s, g) => s.t === 'b' ? !!(g.buttons[s.i] && g.buttons[s.i].pressed) : ((g.axes[s.i] || 0) - s.base) * s.s > 0.6;
+let padEntries = PAD_MAP;
+function applyPadCustom() {
+  padEntries = padCustom ? Object.entries(padCustom).map(([k, s]) => [k, g => specOn(s, g)]) : PAD_MAP;
+  for (const k in padHeld) { if (padHeld[k]) keys[k] = false; padHeld[k] = false; }
+}
+function setPadCustom(m) {
+  padCustom = m;
+  try { if (m) localStorage.setItem('bmx-padmap', JSON.stringify(m)); else localStorage.removeItem('bmx-padmap'); } catch (e) {}
+  applyPadCustom();
+}
+applyPadCustom();
+const getPads = () => navigator.getGamepads ? [...navigator.getGamepads()].filter(Boolean) : [];
 function pollGamepad() {
-  const pads = navigator.getGamepads ? [...navigator.getGamepads()].filter(Boolean) : [];
+  const pads = getPads();
   padConnected = pads.length > 0;
-  for (const [key, test] of PAD_MAP) {
+  for (const [key, test] of padEntries) {
     const on = pads.some(g => test(g));
     if (on && !padHeld[key]) keyDown(key, false, performance.now());
     if (!on && padHeld[key]) keys[key] = false;
@@ -1373,10 +1442,14 @@ function drawReplay() {
 
 // ---------- Choix des commandes : clavier, tactile (smartphone) ou manette Bluetooth ----------
 const $ = id => document.getElementById(id);
-const IS_TOUCH = (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches)
-  || (typeof window !== 'undefined' && 'ontouchstart' in window);
-let controlMode = IS_TOUCH ? 'touch' : 'keyboard', panelOpen = false;
-try { const s = localStorage.getItem('bmx-controls'); if (s === 'keyboard' || s === 'touch' || s === 'pad') controlMode = s; } catch (e) {}
+// tactile seulement si l'appareil a vraiment un écran tactile (une TV Android déclare parfois un pointeur « coarse »)
+const IS_TOUCH = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
+  && ((typeof navigator !== 'undefined' && navigator.maxTouchPoints) | 0) > 0;
+let controlMode = IS_TOUCH ? 'touch' : 'keyboard', panelOpen = false, userChoseMode = false;
+try {
+  const s = localStorage.getItem('bmx-controls');
+  if (s === 'keyboard' || s === 'touch' || s === 'pad') { controlMode = s; userChoseMode = true; }
+} catch (e) {}
 const touchLayer = $('touch'), menuBtn = $('menuBtn'), panel = $('tol'), ctrlSel = $('ctrlMode');
 const padStatus = $('padStatus'), padHelp = $('padHelp'), replayBar = $('replayBar');
 
@@ -1402,21 +1475,22 @@ function releaseAll() { for (const k in keys) keys[k] = false; for (const b of t
 addEventListener('blur', releaseAll);
 if (typeof document.addEventListener === 'function') document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
 
-function setControlMode(m) {
+// save = false : choix automatique (manette détectée), qui ne remplace pas un choix du joueur
+function setControlMode(m, save = true) {
   controlMode = m; ctrlSel.value = m;
-  try { localStorage.setItem('bmx-controls', m); } catch (e) {}
+  if (save) { userChoseMode = true; try { localStorage.setItem('bmx-controls', m); } catch (e) {} }
   applyControlUI();
 }
 function applyControlUI() {
   document.body.classList.toggle('touchmode', IS_TOUCH);
-  menuBtn.hidden = !IS_TOUCH;
-  panel.classList.toggle('collapsed', IS_TOUCH && !panelOpen);
+  menuBtn.hidden = !IS_TOUCH && controlMode !== 'pad';
+  panel.classList.toggle('collapsed', (IS_TOUCH || controlMode === 'pad') && !panelOpen);
   padHelp.hidden = controlMode !== 'pad';
   syncTouchUI(true);
 }
 ctrlSel.addEventListener('change', () => { ctrlSel.blur(); setControlMode(ctrlSel.value); });
 menuBtn.addEventListener('click', () => { panelOpen = !panelOpen; menuBtn.blur(); applyControlUI(); });
-function closePanel() { if (IS_TOUCH) { panelOpen = false; applyControlUI(); } }
+function closePanel() { if (IS_TOUCH || controlMode === 'pad') { panelOpen = false; applyControlUI(); } }
 $('bNew').addEventListener('click', e => { e.currentTarget.blur(); reset(); closePanel(); });
 $('bReplay').addEventListener('click', e => { e.currentTarget.blur(); toggleReplay(); closePanel(); });
 $('bFull').addEventListener('click', e => {
@@ -1434,7 +1508,7 @@ rbKey('rbPause', ' '); rbKey('rbBack', 'ArrowLeft'); rbKey('rbFwd', 'ArrowRight'
 // met à jour ce qui change à l'écran : couche tactile, libellés, état de la manette
 let uiState = '', padState = '';
 function syncTouchUI(force) {
-  const showTouch = controlMode === 'touch' && !replay && !editorOpen;
+  const showTouch = controlMode === 'touch' && !replay && !editorOpen && !cfg;
   const st = [showTouch, !!replay, p.air].join();
   if (force || st !== uiState) {
     uiState = st;
@@ -1446,13 +1520,94 @@ function syncTouchUI(force) {
     $('tbGas').textContent = p.air ? '↻' : 'PÉDALER';
     $('tbBrake').textContent = p.air ? '↺' : 'FREIN';
   }
-  const ps = padConnected ? 'ok' : 'no';
+  const pad0 = getPads()[0];
+  const nonStd = !!pad0 && pad0.mapping !== 'standard' && !padCustom;
+  const ps = (padConnected ? 'ok' : 'no') + (padCustom ? 'c' : '') + (nonStd ? 'n' : '');
   if (ps !== padState) {
     padState = ps;
-    padStatus.textContent = padConnected ? 'Manette détectée ✓' : 'Aucune manette détectée';
+    padStatus.textContent = padConnected
+      ? 'Manette détectée ✓' + (padCustom ? ' (disposition personnalisée)' : nonStd ? ' — disposition non standard : utilise « Configurer la manette »' : '')
+      : 'Aucune manette détectée';
     padStatus.classList.toggle('ok', padConnected);
   }
+  // une manette branchée sans choix du joueur : on passe en mode manette (une TV Android ne se déclare pas tactile)
+  if (padConnected && !userChoseMode && controlMode !== 'pad') setControlMode('pad', false);
 }
+// ---------- Assistant de configuration de la manette ----------
+// Pour chaque action, le joueur appuie sur le bouton (ou pousse la gâchette / le stick) de son choix.
+// Fonctionne avec n'importe quelle disposition de boutons, y compris les manettes non standard sous Android TV.
+const cfgEl = $('padCfg'), cfgAction = $('cfgAction'), cfgTip = $('cfgTip'), cfgMsg = $('cfgMsg'), cfgProg = $('cfgProg');
+let cfg = null;   // { i, specs, base, pending }
+const specName = s => s.t === 'b' ? 'bouton ' + s.i : 'axe ' + s.i + (s.s > 0 ? ' +' : ' −');
+const sameSpec = (a, b) => a.t === b.t && a.i === b.i && (a.t === 'b' || a.s === b.s);
+function renderCfg() {
+  const a = PAD_ACTIONS[cfg.i];
+  cfgAction.textContent = a.label;
+  cfgTip.textContent = 'Appuie sur le bouton voulu — suggestion : ' + a.tip + '  (' + (cfg.i + 1) + ' / ' + PAD_ACTIONS.length + ')';
+  cfgProg.style.width = (cfg.i / PAD_ACTIONS.length * 100) + '%';
+}
+function startPadConfig() {
+  const g = getPads()[0];
+  cfg = { i: 0, specs: {}, base: g ? Array.from(g.axes) : [], pending: null };
+  releaseAll();
+  cfgEl.hidden = false; cfgMsg.textContent = g ? '' : 'Aucune manette détectée : appuie sur un bouton de la manette.';
+  renderCfg();
+}
+function endPadConfig(save) {
+  if (save && Object.keys(cfg.specs).length) { setPadCustom(cfg.specs); }
+  cfg = null; cfgEl.hidden = true;
+  if (save) { msg = 'Manette configurée ✓'; msgT = 2; }
+}
+function cfgNext() {
+  cfg.pending = null; cfg.i++; cfgMsg.textContent = '';
+  if (cfg.i >= PAD_ACTIONS.length) endPadConfig(true); else renderCfg();
+}
+// entrée actuellement active : un bouton enfoncé, sinon un axe qui a bougé par rapport à sa valeur de départ
+function activeInput(g) {
+  for (let i = 0; i < g.buttons.length; i++) if (g.buttons[i] && g.buttons[i].pressed) return { spec: { t: 'b', i }, peak: 0 };
+  for (let i = 0; i < g.axes.length; i++) {
+    const d = g.axes[i] - (cfg.base[i] || 0);
+    if (Math.abs(d) > 0.7) return { spec: { t: 'a', i, s: Math.sign(d), base: cfg.base[i] || 0 }, peak: g.axes[i] };
+  }
+  return null;
+}
+function stepConfig() {
+  const g = getPads()[0];
+  padConnected = !!g;
+  if (!g) { cfgMsg.textContent = 'Aucune manette détectée : appuie sur un bouton de la manette.'; return; }
+  if (!cfg.base.length) cfg.base = Array.from(g.axes);
+  if (cfg.pending) {
+    // on attend que le joueur relâche ; pour un axe, la valeur de repos devient la référence
+    const sp = cfg.pending.spec;
+    const released = sp.t === 'b' ? !(g.buttons[sp.i] && g.buttons[sp.i].pressed) : Math.abs(g.axes[sp.i] - cfg.pending.peak) > 0.6;
+    if (released) {
+      // la valeur de repos d'une gâchette change après son premier appui (0 puis −1 sur certaines manettes) :
+      // on la remet à jour pour qu'elle ne soit pas prise pour un appui à l'étape suivante
+      if (sp.t === 'a') cfg.base[sp.i] = g.axes[sp.i];
+      if (cfg.pending.ignore) { cfg.pending = null; return; }   // entrée déjà prise : on attend une autre
+      if (sp.t === 'a') sp.base = g.axes[sp.i];
+      cfg.specs[PAD_ACTIONS[cfg.i].key] = sp;
+      cfgNext();
+    }
+    return;
+  }
+  const act = activeInput(g);
+  if (!act) return;
+  const dup = Object.entries(cfg.specs).find(([, s]) => sameSpec(s, act.spec));
+  if (dup) {
+    const other = PAD_ACTIONS.find(a => a.key === dup[0]);
+    cfgMsg.textContent = 'Déjà utilisé pour « ' + other.label + ' » : choisis une autre entrée (' + specName(act.spec) + ').';
+    cfg.pending = { spec: act.spec, peak: act.peak, ignore: true };
+    return;
+  }
+  cfgMsg.textContent = 'Reçu : ' + specName(act.spec);
+  cfg.pending = act;
+}
+$('cfgSkip').addEventListener('click', () => { if (cfg) cfgNext(); });
+$('cfgBack').addEventListener('click', () => { if (cfg && cfg.i > 0) { cfg.pending = null; cfg.i--; delete cfg.specs[PAD_ACTIONS[cfg.i].key]; cfgMsg.textContent = ''; renderCfg(); } });
+$('cfgCancel').addEventListener('click', () => endPadConfig(false));
+$('bPadCfg').addEventListener('click', e => { e.currentTarget.blur(); closePanel(); startPadConfig(); });
+$('bPadReset').addEventListener('click', e => { e.currentTarget.blur(); setPadCustom(null); msg = 'Manette : disposition par défaut'; msgT = 2; });
 ctrlSel.value = controlMode;
 
 reset();
@@ -1461,7 +1616,8 @@ let last = performance.now();
 function loop(t) {
   const dt = Math.min(0.033, (t - last) / 1000);
   last = t;
-  if (replay) { pollGamepad(); stepReplay(dt); }
+  if (cfg) stepConfig();   // jeu en pause pendant la configuration de la manette
+  else if (replay) { pollGamepad(); stepReplay(dt); }
   // jeu en pause pendant l'édition et le replay
   else if (!editorOpen) { pollGamepad(); update(dt); recordFrame(dt); }
   syncTouchUI();
