@@ -210,6 +210,7 @@
   <div id="padStatus" class="hint"></div>
   <div class="help" id="padHelp" hidden>Manette PS5 : maintiens PS + Créer jusqu'au clignotement ; PS4 : PS + Share.
     Connecte-la, puis appuie sur un bouton. Elle marche aussi sur PC.</div>
+  <div class="help" id="padDiag" hidden></div>
   <div class="btnrow">
     <button class="btn" id="bPadCfg" tabindex="-1">Configurer la manette</button>
     <button class="btn" id="bPadReset" tabindex="-1">Manette par défaut</button>
@@ -1588,6 +1589,7 @@ function applyControlUI() {
   $('tolClose').hidden = false;
   panel.classList.toggle('collapsed', !panelOpen);
   padHelp.hidden = controlMode !== 'pad';
+  $('padDiag').hidden = controlMode !== 'pad';
   if (!$('cmdPanel').hidden) renderCmd();
   syncTouchUI(true);
 }
@@ -1696,6 +1698,21 @@ $('bFull').addEventListener('click', e => {
 const rbKey = (id, key) => $(id).addEventListener('click', e => { e.currentTarget.blur(); if (replay) replayKey({ key, preventDefault() {} }); });
 rbKey('rbPause', ' '); rbKey('rbBack', 'ArrowLeft'); rbKey('rbFwd', 'ArrowRight'); rbKey('rbSlow', 'ArrowDown'); rbKey('rbQuit', 'Escape');
 
+// Diagnostic manette (mode manette) : ce que le navigateur voit vraiment. Sur une TV Android, certains navigateurs
+// n'exposent pas l'API Gamepad (ou seulement sur une page sécurisée) et transforment les boutons en touches clavier.
+let lastKeyDiag = 'aucune', padDiagText = '';
+addEventListener('keydown', e => { lastKeyDiag = 'key « ' + e.key + ' », code « ' + e.code + ' », keyCode ' + e.keyCode; }, true);
+function updatePadDiag() {
+  if (controlMode !== 'pad') return;
+  const api = typeof navigator.getGamepads === 'function';
+  const pads = getPads();
+  const txt = 'Diagnostic — API manette : ' + (api ? 'oui' : 'non')
+    + ' · page sécurisée : ' + (window.isSecureContext === false ? 'non' : 'oui')
+    + ' · manettes vues : ' + (pads.length ? pads.map(g => g.id + ' [' + (g.mapping || 'non standard') + ']').join(', ') : 'aucune')
+    + ' · dernière touche reçue : ' + lastKeyDiag;
+  if (txt !== padDiagText) { padDiagText = txt; $('padDiag').textContent = txt; }
+}
+
 // met à jour ce qui change à l'écran : couche tactile, libellés, état de la manette
 let uiState = '', padState = '';
 function syncTouchUI(force) {
@@ -1711,6 +1728,7 @@ function syncTouchUI(force) {
     $('tbGas').textContent = p.air ? '↻' : 'PÉDALER';
     $('tbBrake').textContent = p.air ? '↺' : 'FREIN';
   }
+  updatePadDiag();
   const pad0 = getPads()[0];
   const nonStd = !!pad0 && pad0.mapping !== 'standard' && !padCustom;
   const ps = (padConnected ? 'ok' : 'no') + (padCustom ? 'c' : '') + (nonStd ? 'n' : '');
