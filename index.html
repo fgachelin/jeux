@@ -25,7 +25,22 @@
   #padStatus.ok { color: #2e7d32; }
 
   /* bouton de menu (smartphone) */
-  #menuBtn { position: fixed; top: calc(10px + env(safe-area-inset-top)); right: calc(10px + env(safe-area-inset-right)); z-index: 8; }
+  #topBtns { position: fixed; top: calc(10px + env(safe-area-inset-top)); right: calc(10px + env(safe-area-inset-right)); z-index: 8;
+             display: flex; gap: 6px; }
+
+  /* tableau des commandes */
+  #cmdPanel { position: fixed; top: 56px; left: 50%; transform: translateX(-50%); width: min(560px, calc(100vw - 24px));
+              max-height: calc(100vh - 70px); overflow-y: auto; box-sizing: border-box; z-index: 9; touch-action: pan-y;
+              background: rgba(255,255,255,0.97); border: 1px solid #d8cdbd; border-radius: 8px; padding: 8px 12px 12px;
+              font-size: 13px; color: #333; }
+  #cmdPanel[hidden] { display: none; }
+  #cmdPanel .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  #cmdPanel h3 { margin: 0; font-size: 16px; }
+  #cmdPanel table { width: 100%; border-collapse: collapse; }
+  #cmdPanel th { text-align: left; font-size: 12px; color: #777; padding: 8px 6px 3px; border-bottom: 1px solid #d8cdbd; }
+  #cmdPanel td { padding: 4px 6px; border-bottom: 1px solid #efe8dc; vertical-align: top; }
+  #cmdPanel td:last-child { font-weight: 600; white-space: nowrap; }
+  #cmdPanel .note { color: #777; font-size: 12px; margin: 8px 0 0; }
 
   /* commandes tactiles */
   #touch { position: fixed; inset: 0; z-index: 5; pointer-events: none; touch-action: none;
@@ -43,11 +58,13 @@
   .tb.small { width: var(--s); height: var(--s); font-size: clamp(9px, 2.4vmin, 12px); }
   #touch .fig { opacity: 0.45; }
   #touch.air .fig { opacity: 1; }
-  #tbBrake { left: var(--pl); bottom: var(--pb); }
-  #tbGas   { left: calc(var(--pl) + var(--b) + 12px); bottom: var(--pb); width: calc(var(--b) * 1.2); height: calc(var(--b) * 1.2); }
-  #tbJump  { right: var(--pr); bottom: var(--pb); width: calc(var(--b) * 1.2); height: calc(var(--b) * 1.2); }
-  #tbDown  { right: calc(var(--pr) + var(--b) * 1.2 + 12px); bottom: var(--pb); }
-  #figs { position: absolute; right: var(--pr); bottom: calc(var(--pb) + var(--b) * 1.2 + 12px); display: grid;
+  /* à droite, disposition des flèches d'un clavier : ↑ SAUT au-dessus, puis ← FREIN, ↓ BAS, → PÉDALER */
+  #tbGas   { right: var(--pr); bottom: var(--pb); }
+  #tbDown  { right: calc(var(--pr) + var(--b) + 8px); bottom: var(--pb); }
+  #tbBrake { right: calc(var(--pr) + (var(--b) + 8px) * 2); bottom: var(--pb); }
+  #tbJump  { right: calc(var(--pr) + var(--b) + 8px); bottom: calc(var(--pb) + var(--b) + 8px); }
+  /* figures en bas à gauche */
+  #figs { position: absolute; left: var(--pl); bottom: var(--pb); display: grid;
           grid-template-columns: repeat(4, var(--s)); gap: 8px; pointer-events: none; }
   #figs .tb { position: static; }
 
@@ -132,7 +149,14 @@
 </head>
 <body>
 <canvas id="c"></canvas>
-<button id="menuBtn" class="btn" hidden>☰ Réglages</button>
+<div id="topBtns">
+  <button id="cmdBtn" class="btn">Commandes</button>
+  <button id="menuBtn" class="btn" hidden>☰ Réglages</button>
+</div>
+<div id="cmdPanel" hidden>
+  <div class="head"><h3 id="cmdTitle">Commandes</h3><button class="btn" id="cmdClose" aria-label="Fermer les commandes">✕</button></div>
+  <table id="cmdTable"></table>
+</div>
 
 <div id="touch" hidden>
   <button class="tb big" id="tbBrake" data-key="PadBrake">FREIN</button>
@@ -626,6 +650,27 @@ const brakeOn = () => keys.PadBrake || (p.dir > 0 ? keys.ArrowLeft : keys.ArrowR
 // ---------- État ----------
 let p, best = 0, msg = '', msgT = 0, particles = [];
 try { best = +localStorage.getItem('bmx-best') || 0; } catch (e) {}
+// Zoom de l'image : pincer avec deux doigts sur l'écran tactile (mémorisé)
+let zoom = 1;
+try { zoom = Math.min(2.5, Math.max(0.4, +localStorage.getItem('bmx-zoom') || 1)); } catch (e) {}
+const pinch = new Map();   // pointeurs posés sur le canvas : id → [x, y]
+let pinchStart = null;     // { d, zoom } au moment où le 2e doigt se pose
+const pinchDist = () => { const [a, b] = [...pinch.values()]; return Math.hypot(a[0] - b[0], a[1] - b[1]) || 1; };
+cv.addEventListener('pointerdown', e => {
+  if (e.pointerType !== 'touch') return;
+  pinch.set(e.pointerId, [e.clientX, e.clientY]);
+  if (pinch.size === 2) pinchStart = { d: pinchDist(), zoom };
+});
+cv.addEventListener('pointermove', e => {
+  if (!pinch.has(e.pointerId)) return;
+  pinch.set(e.pointerId, [e.clientX, e.clientY]);
+  if (pinch.size === 2 && pinchStart) zoom = Math.min(2.5, Math.max(0.4, pinchStart.zoom * pinchDist() / pinchStart.d));
+});
+for (const ev of ['pointerup', 'pointercancel']) cv.addEventListener(ev, e => {
+  if (!pinch.delete(e.pointerId)) return;
+  pinchStart = null;
+  if (pinch.size < 2) try { localStorage.setItem('bmx-zoom', zoom); } catch (err) {}
+});
 let resetRec = null;   // zone cliquable du « reset » du record, posée par draw()
 cv.addEventListener('pointerdown', e => {
   const r = resetRec;
@@ -1071,11 +1116,17 @@ function drawRider() {
 function draw() {
   ctx.fillStyle = '#f4efe6'; ctx.fillRect(0, 0, W, H);
 
+  // zoom (pincer l'écran tactile) : le monde est agrandi / réduit autour du pilote, le HUD reste à sa taille
+  const ax = sx(p.x), ay = sy(p.y);
+  const xLo = camX + ax - ax / zoom, xHi = camX + ax + (W - ax) / zoom;
+  ctx.save();
+  ctx.translate(ax, ay); ctx.scale(zoom, zoom); ctx.translate(-ax, -ay);
+
   // la piste : une simple ligne
   ctx.strokeStyle = '#6b4a2b'; ctx.lineWidth = 3; ctx.lineJoin = 'round';
   ctx.beginPath();
-  const x0 = Math.max(0, Math.floor(camX) - 5);
-  for (let x = x0; x < camX + W + 10; x += 3) {
+  const x0 = Math.max(0, Math.floor(xLo) - 5);
+  for (let x = x0; x < xHi + 10; x += 3) {
     const X = sx(x), Y = sy(ground(x));
     if (x === x0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
   }
@@ -1084,7 +1135,7 @@ function draw() {
   // repères de distance
   ctx.fillStyle = '#b8a48c'; ctx.font = '12px system-ui'; ctx.textAlign = 'center';
   const step = 50 * PX_PER_M;
-  for (let x = Math.ceil(camX / step) * step; x < camX + W; x += step) {
+  for (let x = Math.ceil(xLo / step) * step; x < xHi; x += step) {
     const m = Math.round((x - 100) / PX_PER_M);
     if (m <= 0) continue;
     const Y = sy(ground(x));
@@ -1096,6 +1147,7 @@ function draw() {
   for (const q of particles) ctx.fillRect(sx(q.x) - 1.5, sy(q.y) - 1.5, 3, 3);
 
   drawRider();
+  ctx.restore();
 
   // HUD
   const kmh = Math.abs(p.air ? Math.hypot(p.vx, p.vy) : p.v) / PX_PER_M * 3.6;
@@ -1119,20 +1171,11 @@ function draw() {
   ctx.fillStyle = ch >= 1 ? '#c0392b' : '#e67e22';
   ctx.fillRect(80, 73, 117 * ch, 9);
   ctx.fillStyle = '#777'; ctx.font = '13px system-ui';
-  if (controlMode === 'touch') {
-    // les boutons à l'écran suffisent : pas de texte d'aide
-  } else if (controlMode === 'pad' && !padConnected) {
+  if (controlMode === 'pad' && !padConnected) {
     ctx.textAlign = 'center'; ctx.font = '15px system-ui';
     ctx.fillText('Mode manette : connecte ta manette, puis appuie sur un bouton.', W / 2, H - 34);
     ctx.fillText('(PS5 : maintiens PS + Créer jusqu\'au clignotement — PS4 : PS + Share)', W / 2, H - 14);
     ctx.textAlign = 'left';
-  } else if (padConnected) {
-    ctx.fillText('Manette — figures en l\'air : R1 rotation 360   ·   L1 x-up   ·   stick droit ↑ barspin, ↓ superman   ·   Rond main(s) (2 appuis = deux)   ·   Carré pied(s) (2 appuis = deux)   ·   Triangle tailwhip (2 appuis = double)', 16, H - 34);
-    ctx.fillText('Manette — au sol : R2 pédaler (dans le sens du vélo)   L2 freiner   Croix sauter   ↓ se baisser   ·   En l\'air : R2 / → pivoter horaire   L2 / ← anti-horaire   ·   L1 avancer de 10 m (à l\'arrêt)   ·   Options nouvelle partie   ·   Créer replay', 16, H - 16);
-  } else {
-    ctx.fillText('Figures en l\'air : R rotation autour de l\'axe vertical (maintenir ; 180° = demi-tour)   ·   X x-up (maintenir)   ·   B barspin   ·   M lâcher une main (maintenir ; M+M deux)   ·   P lâcher un pied (maintenir ; P+P deux)   ·   S superman (maintenir)   ·   T tailwhip (T+T double)', 16, H - 52);
-    ctx.fillText('Au sol : pédaler = flèche du côté où regarde le vélo, freiner = l\'autre (R pendant un saut : 180° = repartir vers la gauche)   ↑ sauter (↓ maintenu jusqu\'à 1 s = saut plus haut)   ↓ se baisser (pumper, amortir)   ·   En l\'air : → pivoter horaire   ← pivoter anti-horaire   ·   X avancer de 10 m (à l\'arrêt)   ·   N nouvelle partie   ·   E éditeur de sauts   ·   L replay de la dernière série', 16, H - 34);
-    ctx.fillText('Manette PlayStation : connecte-la puis appuie sur un bouton', 16, H - 16);
   }
 
   if (msgT > 0) {
@@ -1520,12 +1563,100 @@ function applyControlUI() {
   $('tolClose').hidden = false;
   panel.classList.toggle('collapsed', !panelOpen);
   padHelp.hidden = controlMode !== 'pad';
+  if (!$('cmdPanel').hidden) renderCmd();
   syncTouchUI(true);
 }
 ctrlSel.addEventListener('change', () => { ctrlSel.blur(); setControlMode(ctrlSel.value); });
 menuBtn.addEventListener('click', () => { panelOpen = !panelOpen; menuBtn.blur(); applyControlUI(); });
 function closePanel() { if (IS_TOUCH || controlMode === 'pad') { panelOpen = false; applyControlUI(); } }
 $('tolClose').addEventListener('click', e => { e.currentTarget.blur(); panelOpen = false; applyControlUI(); });
+
+// ---------- Tableau des commandes (selon le mode de commandes choisi) ----------
+const CMD_TABLES = {
+  keyboard: ['Clavier', [
+    ['Au sol'],
+    ['Pédaler', 'flèche du côté où regarde le vélo'],
+    ['Freiner', 'l\'autre flèche'],
+    ['Sauter', '↑  (↓ maintenu jusqu\'à 1 s : saut plus haut)'],
+    ['Se baisser (pumper, amortir)', '↓'],
+    ['Avancer de 10 m (à l\'arrêt)', 'X'],
+    ['En l\'air'],
+    ['Pivoter dans le sens horaire / anti-horaire', '→  /  ←'],
+    ['Rotation autour de l\'axe vertical (180° = demi-tour)', 'R (maintenir)'],
+    ['X-up', 'X (maintenir)'],
+    ['Barspin', 'B'],
+    ['Lâcher une main (deux : M+M)', 'M (maintenir)'],
+    ['Lâcher un pied (deux : P+P)', 'P (maintenir)'],
+    ['Superman', 'S (maintenir)'],
+    ['Tailwhip (double : T+T)', 'T'],
+    ['Jeu'],
+    ['Nouvelle partie', 'N'],
+    ['Éditeur de sauts', 'E'],
+    ['Replay de la dernière série', 'L'],
+  ]],
+  pad: ['Manette', [
+    ['Au sol'],
+    ['Pédaler (dans le sens du vélo)', 'R2'],
+    ['Freiner', 'L2'],
+    ['Sauter', 'Croix  /  ↑ de la croix'],
+    ['Se baisser (pumper, amortir)', '↓ de la croix  /  stick gauche ↓'],
+    ['Avancer de 10 m (à l\'arrêt)', 'L1'],
+    ['En l\'air'],
+    ['Pivoter dans le sens horaire / anti-horaire', 'R2  /  L2  (ou → / ←)'],
+    ['Rotation autour de l\'axe vertical', 'R1 (maintenir)'],
+    ['X-up', 'L1 (maintenir)'],
+    ['Barspin', 'stick droit ↑'],
+    ['Superman', 'stick droit ↓ (maintenir)'],
+    ['Lâcher une main (deux : 2 appuis rapides)', 'Rond (maintenir)'],
+    ['Lâcher un pied (deux : 2 appuis rapides)', 'Carré (maintenir)'],
+    ['Tailwhip (double : 2 appuis rapides)', 'Triangle'],
+    ['Jeu'],
+    ['Nouvelle partie', 'Options'],
+    ['Replay de la dernière série', 'Créer'],
+  ]],
+  touch: ['Tactile', [
+    ['Au sol'],
+    ['Pédaler', 'bouton PÉDALER'],
+    ['Freiner', 'bouton FREIN'],
+    ['Sauter', 'bouton SAUT'],
+    ['Se baisser (pumper, amortir)', 'bouton BAS'],
+    ['En l\'air'],
+    ['Pivoter dans le sens horaire / anti-horaire', 'boutons ↻  /  ↺'],
+    ['Rotation autour de l\'axe vertical', 'bouton 360° (maintenir)'],
+    ['X-up', 'bouton X-up (maintenir)'],
+    ['Barspin', 'bouton Barspin'],
+    ['Lâcher une main (deux : 2 appuis rapides)', 'bouton Main (maintenir)'],
+    ['Lâcher un pied (deux : 2 appuis rapides)', 'bouton Pied (maintenir)'],
+    ['Superman', 'bouton Superman (maintenir)'],
+    ['Tailwhip (double : 2 appuis rapides)', 'bouton Tailwhip'],
+    ['Jeu'],
+    ['Nouvelle partie, replay', 'menu ☰ Réglages'],
+  ]],
+};
+function renderCmd() {
+  const [title, rows] = CMD_TABLES[controlMode] || CMD_TABLES.keyboard;
+  $('cmdTitle').textContent = 'Commandes — ' + title;
+  const t = $('cmdTable');
+  t.innerHTML = '';
+  const add = (tag, cells, span) => {
+    const tr = t.insertRow();
+    cells.forEach(txt => { const c = document.createElement(tag); c.textContent = txt; if (span) c.colSpan = 2; tr.appendChild(c); });
+  };
+  // manette personnalisée : on affiche les entrées choisies par le joueur
+  if (controlMode === 'pad' && padCustom) {
+    add('th', ['Action', 'Entrée']);
+    for (const a of PAD_ACTIONS) if (padCustom[a.key]) add('td', [a.label, specName(padCustom[a.key])]);
+    return;
+  }
+  for (const r of rows) r.length === 1 ? add('th', r, true) : add('td', r);
+}
+function setCmdPanel(open) {
+  if (open) renderCmd();
+  $('cmdPanel').hidden = !open;
+}
+$('cmdBtn').addEventListener('click', e => { e.currentTarget.blur(); setCmdPanel($('cmdPanel').hidden); });
+$('cmdClose').addEventListener('click', e => { e.currentTarget.blur(); setCmdPanel(false); });
+addEventListener('keydown', e => { if (e.key === 'Escape' && !$('cmdPanel').hidden) setCmdPanel(false); });
 $('bNew').addEventListener('click', e => { e.currentTarget.blur(); reset(); closePanel(); });
 $('bReplay').addEventListener('click', e => { e.currentTarget.blur(); toggleReplay(); closePanel(); });
 $('bFull').addEventListener('click', e => {
