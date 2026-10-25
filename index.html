@@ -657,7 +657,7 @@ const pinch = new Map();   // pointeurs posés sur le canvas : id → [x, y]
 let pinchStart = null;     // { d, zoom } au moment où le 2e doigt se pose
 const pinchDist = () => { const [a, b] = [...pinch.values()]; return Math.hypot(a[0] - b[0], a[1] - b[1]) || 1; };
 cv.addEventListener('pointerdown', e => {
-  if (e.pointerType !== 'touch') return;
+  if (e.pointerType !== 'touch' || e.btnHandled) return;
   pinch.set(e.pointerId, [e.clientX, e.clientY]);
   if (pinch.size === 2) pinchStart = { d: pinchDist(), zoom };
 });
@@ -1529,25 +1529,50 @@ try {
 const touchLayer = $('touch'), menuBtn = $('menuBtn'), panel = $('tol'), ctrlSel = $('ctrlMode');
 const padStatus = $('padStatus'), padHelp = $('padHelp'), replayBar = $('replayBar');
 
-// chaque bouton tactile se comporte comme une touche maintenue ; plusieurs doigts en même temps sont gérés
+// chaque bouton tactile se comporte comme une touche maintenue ; plusieurs doigts en même temps sont gérés.
+// Un doigt est une zone de contact (cercle) : tous les boutons que cette zone touche sont enfoncés, ce qui permet
+// d'appuyer sur deux boutons voisins avec un seul pouce (posé à cheval sur les deux, ou entre eux).
 const touchBtns = document.querySelectorAll ? [...document.querySelectorAll('.tb')] : [];
+const touchPtrs = new Map();   // pointerId → { x, y, r }
+const MIN_TOUCH_R = 8;         // rayon minimal du contact (px) : un pouce entre deux boutons (écart de 8 px) touche les deux
+const touchOf = e => ({ x: e.clientX, y: e.clientY, r: Math.min(28, Math.max(MIN_TOUCH_R, Math.max(e.width || 0, e.height || 0) / 2)) });
+const touchHits = (r, t) => {
+  const dx = Math.max(r.left - t.x, 0, t.x - r.right), dy = Math.max(r.top - t.y, 0, t.y - r.bottom);
+  return dx * dx + dy * dy < t.r * t.r;
+};
+function setBtn(b, on) {
+  if (!!b.pressed === on) return;
+  b.pressed = on; b.classList.toggle('on', on);
+  if (on) keyDown(b.dataset.key, false, performance.now()); else keys[b.dataset.key] = false;
+}
+function updateTouch() {
+  for (const b of touchBtns) {
+    const r = b.getBoundingClientRect();
+    setBtn(b, [...touchPtrs.values()].some(t => touchHits(r, t)));
+  }
+}
 for (const b of touchBtns) {
-  const key = b.dataset.key;
-  let id = null;
-  b.release = () => { if (id !== null) { id = null; keys[key] = false; b.classList.remove('on'); } };
-  b.addEventListener('pointerdown', e => {
-    e.preventDefault();
-    if (id !== null) return;
-    id = e.pointerId;
-    if (b.setPointerCapture) b.setPointerCapture(e.pointerId);
-    b.classList.add('on');
-    keyDown(key, false, performance.now());
-  });
-  for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) b.addEventListener(ev, e => { if (e.pointerId === id) b.release(); });
+  b.release = () => setBtn(b, false);
   b.addEventListener('contextmenu', e => e.preventDefault());
 }
+addEventListener('pointerdown', e => {
+  if (touchLayer.hidden) return;
+  const t = touchOf(e);
+  if (!touchBtns.some(b => touchHits(b.getBoundingClientRect(), t))) return;
+  e.preventDefault(); e.btnHandled = true;
+  touchPtrs.set(e.pointerId, t);
+  updateTouch();
+}, true);
+addEventListener('pointermove', e => {
+  if (!touchPtrs.has(e.pointerId)) return;
+  touchPtrs.set(e.pointerId, touchOf(e));
+  updateTouch();
+});
+for (const ev of ['pointerup', 'pointercancel']) addEventListener(ev, e => {
+  if (touchPtrs.delete(e.pointerId)) updateTouch();
+});
 // si la page perd le focus, on relâche tout
-function releaseAll() { for (const k in keys) keys[k] = false; for (const b of touchBtns) b.release(); }
+function releaseAll() { touchPtrs.clear(); for (const k in keys) keys[k] = false; for (const b of touchBtns) b.release(); }
 addEventListener('blur', releaseAll);
 if (typeof document.addEventListener === 'function') document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
 
@@ -1679,7 +1704,7 @@ function syncTouchUI(force) {
   if (force || st !== uiState) {
     uiState = st;
     touchLayer.hidden = !showTouch;
-    if (!showTouch) for (const b of touchBtns) b.release();
+    if (!showTouch) { touchPtrs.clear(); for (const b of touchBtns) b.release(); }
     replayBar.hidden = !replay || !IS_TOUCH;
     touchLayer.classList.toggle('air', !!p.air);
     // en l'air, les deux gros boutons font pivoter le vélo
