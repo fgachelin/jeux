@@ -667,7 +667,7 @@ function reset() {
   rec = []; recDur = 0; replay = null;   // le replay ne remonte pas avant une nouvelle partie
   downHold = 0; downGrace = 0;
   p = { x: 100, y: 0, v: 0, vx: 0, vy: 0, air: false, ang: 0, crouch: 0,
-        crank: 0, wheel: 0, crashed: 0, maxX: 100, airTime: 0,
+        crank: 0, wheel: 0, crashed: 0, maxX: 100, x0: 100, airTime: 0,
         av: 0, rot: 0, crashRot: 0, crashTarget: 0, dir: 1,
         segI: 0, entry: { x: 100, v: 180 } };   // entry : début de l'élément de piste en cours et vitesse en y entrant
   clearTricks();
@@ -906,6 +906,10 @@ function step(dt) {
     p.crank = Math.min(level, p.crank + 8 * dt);
   }
   wantJump = false;
+  // la distance repart de zéro dès que la vitesse recule : V·u < 0, u = tangente au sol orientée dans le sens où regarde le vélo
+  const thU = slope(p.x);
+  const along = p.dir * (p.air ? p.vx * Math.cos(thU) + p.vy * Math.sin(thU) : p.v);
+  if (along < 0) { p.x0 = p.x; p.maxX = p.x; }
   p.maxX = Math.max(p.maxX, p.x);
   while (p.segI + 1 < segStarts.length && segStarts[p.segI + 1] <= p.x) {
     p.segI++;
@@ -924,7 +928,7 @@ function update(dt) {
   for (const q of particles) { q.vy -= G * 0.5 * dt; q.x += q.vx * dt; q.y += q.vy * dt; q.t -= dt; }
   particles = particles.filter(q => q.t > 0);
   if (msgT > 0) msgT -= dt;
-  const m = Math.floor((p.maxX - 100) / PX_PER_M);
+  const m = Math.floor((p.maxX - p.x0) / PX_PER_M);
   if (m > best) { best = m; try { localStorage.setItem('bmx-best', best); } catch (e) {} }
   // le pilote est placé au tiers gauche de l'écran en roulant vers la droite, au tiers droit vers la gauche
   camLead += ((p.dir > 0 ? 0.3 : controlMode === 'touch' ? 0.55 : 0.7) - camLead) * Math.min(1, dt * 2);
@@ -988,7 +992,7 @@ function drawRider() {
   // tailwhip : tout ce qui est derrière la colonne de direction tourne autour d'elle
   const cw = Math.cos(p.whip);
   const whipX = pt => [head[0] + (pt[0] - head[0]) * cw, pt[1]];
-  const rear = whipX([-20, -WHEEL_R]), bb = whipX([-3, -10]), seat = whipX([-9, -27]);
+  const rear = whipX([-20, -WHEEL_R]), bb = whipX([-3, -10]), seat = whipX([-10, -21]);   // cadre « sloping » : tube supérieur incliné vers le bas vers l'arrière
 
   // vélo
   ctx.strokeStyle = '#2b2b2b'; ctx.lineWidth = 2;
@@ -1090,7 +1094,7 @@ function draw() {
   ctx.font = 'bold 22px system-ui';
   ctx.fillText(kmh.toFixed(0) + ' km/h', 16, 34);
   ctx.font = '15px system-ui';
-  ctx.fillText('Distance : ' + Math.max(0, Math.floor((p.maxX - 100) / PX_PER_M)) + ' m   ·   Record : ' + best + ' m', 16, 58);
+  ctx.fillText('Distance : ' + Math.max(0, Math.floor((p.maxX - p.x0) / PX_PER_M)) + ' m   ·   Record : ' + best + ' m', 16, 58);
   // jauge de détente du saut
   const ch = jumpCharge();
   ctx.fillText('Détente', 16, 82);
