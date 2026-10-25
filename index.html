@@ -992,7 +992,7 @@ function drawRider() {
   // tailwhip : tout ce qui est derrière la colonne de direction tourne autour d'elle
   const cw = Math.cos(p.whip);
   const whipX = pt => [head[0] + (pt[0] - head[0]) * cw, pt[1]];
-  const rear = whipX([-20, -WHEEL_R]), bb = whipX([-3, -10]), seat = whipX([-10, -21]);   // cadre « sloping » : tube supérieur incliné vers le bas vers l'arrière
+  const rear = whipX([-20, -WHEEL_R]), bb = whipX([-3, -10]), seat = whipX([-3 - 11 * Math.tan(10 * Math.PI / 180), -21]);   // tube de selle à 10° de la verticale ; cadre « sloping » : tube supérieur incliné vers le bas vers l'arrière
 
   // vélo
   ctx.strokeStyle = '#2b2b2b'; ctx.lineWidth = 2;
@@ -1003,7 +1003,10 @@ function drawRider() {
   line([head, front]);
   ctx.strokeStyle = '#2b2b2b'; ctx.lineWidth = 2.5;
   line([head, bar]); line([[bar[0] - 3 * cf, bar[1]], [bar[0] + 3 * cf, bar[1] - 1]]);
-  line([[seat[0] - 5, seat[1] - 2], [seat[0] + 4, seat[1] - 2]]);
+  // tige de selle : prolonge le tube de selle de 0,5 × sa longueur
+  const post = [seat[0] + 0.5 * (seat[0] - bb[0]), seat[1] + 0.5 * (seat[1] - bb[1])];
+  line([seat, post]);
+  line([[post[0] - 5, post[1] - 2], [post[0] + 4, post[1] - 2]]);
 
   const pedA = [bb[0] + Math.cos(p.crank) * 7 * cw, bb[1] + Math.sin(p.crank) * 7];
   const pedB = [bb[0] - Math.cos(p.crank) * 7 * cw, bb[1] - Math.sin(p.crank) * 7];
