@@ -568,7 +568,7 @@ const PAD_MAP = [
   ['b', g => g.axes[3] < -0.5],        // stick droit vers le haut : barspin
   ['s', g => g.axes[3] > 0.5],         // stick droit vers le bas : superman
   ['n', g => g.buttons[9]?.pressed],   // Options : nouvelle partie
-  ['l', g => g.buttons[8]?.pressed],   // Créer : replay de la dernière minute
+  ['l', g => g.buttons[8]?.pressed],   // Créer : replay de la dernière série
 ];
 const padHeld = {};
 let padConnected = false;
@@ -587,7 +587,7 @@ const PAD_ACTIONS = [
   { key: 'm',         label: 'Lâcher une main (deux appuis rapides = deux mains)',       tip: 'stick droit vers la gauche' },
   { key: 'p',         label: 'Lâcher un pied (deux appuis rapides = deux pieds)',        tip: 'stick droit vers la droite' },
   { key: 't',         label: 'Tailwhip (deux appuis rapides = double)',                  tip: 'bouton R3 (clic du stick droit)' },
-  { key: 'l',         label: 'Replay de la dernière minute',                             tip: 'bouton L3 (clic du stick gauche)' },
+  { key: 'l',         label: 'Replay de la dernière série',                            tip: 'bouton L3 (clic du stick gauche)' },
   { key: 'n',         label: 'Nouvelle partie',                                          tip: 'bouton Options' },
 ];
 let padCustom = null;
@@ -626,6 +626,13 @@ const brakeOn = () => keys.PadBrake || (p.dir > 0 ? keys.ArrowLeft : keys.ArrowR
 // ---------- État ----------
 let p, best = 0, msg = '', msgT = 0, particles = [];
 try { best = +localStorage.getItem('bmx-best') || 0; } catch (e) {}
+let resetRec = null;   // zone cliquable du « reset » du record, posée par draw()
+cv.addEventListener('pointerdown', e => {
+  const r = resetRec;
+  if (!r || replay || e.clientX < r.x || e.clientX > r.x + r.w || e.clientY < r.y || e.clientY > r.y + r.h) return;
+  best = 0;
+  try { localStorage.setItem('bmx-best', best); } catch (err) {}
+});
 
 // ---------- Rampe de départ ----------
 // Plateforme puis descente en cosinus (pente max ~32°) ; sa hauteur est calculée pour arriver en bas
@@ -664,7 +671,7 @@ function addStartRamp() {
 function reset() {
   heights = []; segStarts = []; segBase = []; lips = []; baseH = 0;
   addStartRamp();
-  rec = []; recDur = 0; replay = null;   // le replay ne remonte pas avant une nouvelle partie
+  rec = []; recDur = 0; recording = false; replay = null;   // le replay ne remonte pas avant une nouvelle partie
   downHold = 0; downGrace = 0;
   p = { x: 100, y: 0, v: 0, vx: 0, vy: 0, air: false, ang: 0, crouch: 0,
         crank: 0, wheel: 0, crashed: 0, maxX: 100, x0: 100, airTime: 0,
@@ -908,8 +915,7 @@ function step(dt) {
   wantJump = false;
   // la distance repart de zéro dès que la vitesse recule : V·u < 0, u = tangente au sol orientée dans le sens où regarde le vélo
   // (au sol seulement : en l'air il n'y a pas de tangente, on regarde le sens horizontal du saut)
-  const along = p.dir * (p.air ? p.vx : p.v);
-  if (along < 0) { p.x0 = p.x; p.maxX = p.x; }
+  if (alongV() < 0) { p.x0 = p.x; p.maxX = p.x; }
   p.maxX = Math.max(p.maxX, p.x);
   while (p.segI + 1 < segStarts.length && segStarts[p.segI + 1] <= p.x) {
     p.segI++;
@@ -1097,7 +1103,14 @@ function draw() {
   ctx.font = 'bold 22px system-ui';
   ctx.fillText(kmh.toFixed(0) + ' km/h', 16, 34);
   ctx.font = '15px system-ui';
-  ctx.fillText('Distance : ' + Math.max(0, Math.floor((p.maxX - p.x0) / PX_PER_M)) + ' m   ·   Record : ' + best + ' m', 16, 58);
+  const hud = 'Distance : ' + Math.max(0, Math.floor((p.maxX - p.x0) / PX_PER_M)) + ' m   ·   Record : ' + best + ' m';
+  ctx.fillText(hud, 16, 58);
+  // « reset » : remet le record à zéro (clic ou toucher, voir plus bas)
+  const rx = 16 + ctx.measureText(hud).width + 12, rw = ctx.measureText('reset').width;
+  ctx.fillStyle = '#c0392b'; ctx.fillText('reset', rx, 58);
+  ctx.fillRect(rx, 61, rw, 1);
+  resetRec = { x: rx - 6, y: 40, w: rw + 12, h: 28 };
+  ctx.fillStyle = '#333';
   // jauge de détente du saut
   const ch = jumpCharge();
   ctx.fillText('Détente', 16, 82);
@@ -1118,7 +1131,7 @@ function draw() {
     ctx.fillText('Manette — au sol : R2 pédaler (dans le sens du vélo)   L2 freiner   Croix sauter   ↓ se baisser   ·   En l\'air : R2 / → pivoter horaire   L2 / ← anti-horaire   ·   L1 avancer de 10 m (à l\'arrêt)   ·   Options nouvelle partie   ·   Créer replay', 16, H - 16);
   } else {
     ctx.fillText('Figures en l\'air : R rotation autour de l\'axe vertical (maintenir ; 180° = demi-tour)   ·   X x-up (maintenir)   ·   B barspin   ·   M lâcher une main (maintenir ; M+M deux)   ·   P lâcher un pied (maintenir ; P+P deux)   ·   S superman (maintenir)   ·   T tailwhip (T+T double)', 16, H - 52);
-    ctx.fillText('Au sol : pédaler = flèche du côté où regarde le vélo, freiner = l\'autre (R pendant un saut : 180° = repartir vers la gauche)   ↑ sauter (↓ maintenu jusqu\'à 1 s = saut plus haut)   ↓ se baisser (pumper, amortir)   ·   En l\'air : → pivoter horaire   ← pivoter anti-horaire   ·   X avancer de 10 m (à l\'arrêt)   ·   N nouvelle partie   ·   E éditeur de sauts   ·   L replay de la dernière minute', 16, H - 34);
+    ctx.fillText('Au sol : pédaler = flèche du côté où regarde le vélo, freiner = l\'autre (R pendant un saut : 180° = repartir vers la gauche)   ↑ sauter (↓ maintenu jusqu\'à 1 s = saut plus haut)   ↓ se baisser (pumper, amortir)   ·   En l\'air : → pivoter horaire   ← pivoter anti-horaire   ·   X avancer de 10 m (à l\'arrêt)   ·   N nouvelle partie   ·   E éditeur de sauts   ·   L replay de la dernière série', 16, H - 34);
     ctx.fillText('Manette PlayStation : connecte-la puis appuie sur un bouton', 16, H - 16);
   }
 
@@ -1387,11 +1400,22 @@ function renderLibrary() {
   }
 }
 
-// ---------- Replay de la dernière minute ----------
-// chaque image jouée est enregistrée (état du pilote, caméra, message, poussière) dans un tampon de 60 s
-const REPLAY_SECONDS = 60;
+// ---------- Replay de la dernière série ----------
+// chaque image jouée est enregistrée (état du pilote, caméra, message, poussière) dans un tampon de 10 min
+const REPLAY_SECONDS = 600;
 let rec = [], recDur = 0, replay = null;   // replay : { i, acc, paused, slow }
+// vitesse le long du sens où regarde le vélo (V·u) : > 0 on avance, < 0 on recule
+const alongV = () => p.dir * (p.air ? p.vx : p.v);
+// Un enregistrement commence quand V·u > 0 et se termine quand V·u < 0 (le replay est alors la dernière série) ;
+// la durée reste plafonnée à REPLAY_SECONDS
+let recording = false;
 function recordFrame(dt) {
+  const al = alongV();
+  if (al < 0) { recording = false; return; }
+  if (!recording) {
+    if (al <= 0) return;
+    recording = true; rec = []; recDur = 0;
+  }
   rec.push({ dt, p: { ...p }, camX, camY, msg, msgT, particles: particles.map(q => ({ ...q })) });
   recDur += dt;
   while (recDur > REPLAY_SECONDS && rec.length > 1) recDur -= rec.shift().dt;
