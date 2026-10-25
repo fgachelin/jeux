@@ -907,8 +907,8 @@ function step(dt) {
   }
   wantJump = false;
   // la distance repart de zéro dès que la vitesse recule : V·u < 0, u = tangente au sol orientée dans le sens où regarde le vélo
-  const thU = slope(p.x);
-  const along = p.dir * (p.air ? p.vx * Math.cos(thU) + p.vy * Math.sin(thU) : p.v);
+  // (au sol seulement : en l'air il n'y a pas de tangente, on regarde le sens horizontal du saut)
+  const along = p.dir * (p.air ? p.vx : p.v);
   if (along < 0) { p.x0 = p.x; p.maxX = p.x; }
   p.maxX = Math.max(p.maxX, p.x);
   while (p.segI + 1 < segStarts.length && segStarts[p.segI + 1] <= p.x) {
