@@ -65,8 +65,6 @@
   #tbDown  { right: calc(var(--pr) + var(--b) + 8px); bottom: var(--pb); }
   #tbBrake { right: calc(var(--pr) + (var(--b) + 8px) * 2); bottom: var(--pb); }
   #tbJump  { right: calc(var(--pr) + var(--b) + 8px); bottom: calc(var(--pb) + var(--b) + 8px); }
-  /* SAUT au-dessus de PÉDALER, à côté de POUSSER */
-  #tbHop   { right: var(--pr); bottom: calc(var(--pb) + var(--b) + 8px); }
   /* figures en bas à gauche */
   #figs { position: absolute; left: var(--pl); bottom: var(--pb); display: grid;
           grid-template-columns: repeat(4, var(--s)); gap: 8px; pointer-events: none; }
@@ -154,13 +152,11 @@
 <body>
 <canvas id="c"></canvas>
 <div id="topBtns">
-  <button id="kickBtn" class="btn">Appel : parabole</button>
-  <button id="landBtn" class="btn">Réception : lèvre</button>
-  <button id="upBtn" class="btn">↑ : tendre</button>
-  <button id="gripBtn" class="btn">↓ colle : oui</button>
+  <button id="kickBtn" class="btn" title="Profil des bosses d'appel">parabole</button>
+  <button id="landBtn" class="btn" title="Profil des réceptions">angle de la lèvre</button>
   <button id="restartBtn" class="btn">Nouvelle partie</button>
-  <button id="modeBtn" class="btn">Mode : normal</button>
-  <button id="cmdBtn" class="btn">Commandes</button>
+  <button id="modeBtn" class="btn">normal</button>
+  <button id="rewBtn" class="btn" title="Reculer de 5 s (P)">⏪ 5 s</button>
   <button id="menuBtn" class="btn" hidden>☰ Réglages</button>
 </div>
 <div id="cmdPanel" hidden>
@@ -182,7 +178,6 @@
   </div>
   <button class="tb big" id="tbDown" data-key="ArrowDown">BAS</button>
   <button class="tb big" id="tbJump" data-key="ArrowUp">POUSSER</button>
-  <button class="tb big" id="tbHop" data-key=" ">SAUT</button>
 </div>
 
 <div id="replayBar" hidden>
@@ -229,6 +224,7 @@
   <div class="btnrow">
     <button class="btn" id="bReplay">Replay</button>
     <button class="btn" id="bFull">Plein écran</button>
+    <button class="btn" id="cmdBtn">Commandes</button>
   </div>
   <div class="help">iPhone : « Partager » puis « Sur l'écran d'accueil » pour jouer en plein écran.</div>
   <div class="sep"></div>
@@ -789,13 +785,8 @@ let trail, trailBrakes;
 const applyMode = () => { trail = mode !== 'normal'; trailBrakes = mode === 'trail-freins'; };
 applyMode();
 const bestKey = () => mode === 'normal' ? 'bmx-best' : 'bmx-best-' + mode;
-// ↓ maintenu garde le vélo au sol (désactivable : le vélo décolle alors des bosses comme sans ↓)
-let grip = true;
-try { grip = localStorage.getItem('bmx-grip') !== 'off'; } catch (e) {}
-// rôle de ↑ : tendre les jambes doucement (pousser, sans sauter) ou sauter (comme Espace)
-let upJump = false, prevUp = false;
-try { upJump = localStorage.getItem('bmx-up') === 'jump'; } catch (e) {}
-const pushOn = () => !upJump && !!keys.ArrowUp;
+// ↑ : tendre les jambes doucement (pousser, sans sauter)
+const pushOn = () => !!keys.ArrowUp;
 const gasOn = () => !trail && !!(keys.PadGas || (p.dir > 0 ? keys.ArrowRight : keys.ArrowLeft));
 const brakeOn = () => (!trail || trailBrakes) && !!(keys.PadBrake || (p.dir > 0 ? keys.ArrowLeft : keys.ArrowRight));
 
@@ -1082,7 +1073,7 @@ function step(dt) {
     const gBody = G * cth + kap * (1 - kap * p.h) * p.v * p.v, gBike = G * cth + kap * p.v * p.v;
     // ↓ maintenu (sans ↑ ni saut) : le pilote absorbe le terrain, le vélo reste au sol sur les bosses et les bords
     // de table (seule la lèvre d'une bosse d'appel le lance encore) : aide de jeu, plus généreuse que la réalité
-    const absorb = grip && keys.ArrowDown && !pushOn() && !p.pop;
+    const absorb = keys.ArrowDown && !pushOn() && !p.pop;
     legs(dt, absorb ? Math.max(0, gBody) : gBody, true, absorb ? Math.max(0, gBike) : gBike);
     if (absorb) p.unload = false;
     const lev = 1 - kap * p.h, I = M_BIKE + M_RIDER * lev * lev;
@@ -1264,10 +1255,6 @@ function step(dt) {
 }
 
 function update(dt) {
-  // ↑ en mode « sauter » : l'appui (clavier, croix de la manette ou bouton tactile) déclenche le saut comme Espace
-  const up = !!keys.ArrowUp;
-  if (upJump && up && !prevUp) wantJump = true;
-  prevUp = up;
   const n = 4;
   for (let i = 0; i < n; i++) step(dt / n);
   wantJump = false;
@@ -2001,7 +1988,6 @@ const CMD_TABLES = {
     ['Position souple, jambes un peu fléchies', 'aucun bouton'],
     ['Se compresser (charge la détente en 1 s)', 'bouton BAS (maintenir)'],
     ['Pousser le vélo, jambes tendues (sans sauter)', 'bouton POUSSER (maintenir)'],
-    ['Sauter (plus haut compressé, détente chargée par BAS jusqu\'à 1 s)', 'bouton SAUT'],
     ['En l\'air'],
     ['Pivoter dans le sens horaire / anti-horaire', 'boutons ↻  /  ↺'],
     ['Se compresser : rotation plus rapide, moins de traînée', 'bouton BAS (maintenir)'],
@@ -2035,9 +2021,6 @@ function renderCmd() {
   if (trail) add('th', [modeHelp()], true);
   for (let r of rows) {
     if (trail && (/^Pédaler/.test(r[0]) || !trailBrakes && /^Freiner/.test(r[0]))) continue;
-    // ↑ en mode « sauter » : la ligne « Pousser » devient un saut, le pompage se fait en relâchant ↓
-    if (upJump && /^Pousser/.test(r[0])) r = ['Sauter (comme Espace)', r[1]];
-    if (upJump && /^Pomper/.test(r[0])) r = ['Pomper les bosses : compressé au sommet, relâcher dans la descente et le creux', '↓ puis relâcher'];
     r.length === 1 ? add('th', r, true) : add('td', r);
   }
 }
@@ -2052,7 +2035,7 @@ function modeHelp() {
     : 'Mode trail : ni pédalage ni frein, on roule sur l\'élan et la pente';
 }
 function showMode() {
-  $('modeBtn').textContent = 'Mode : ' + MODE_NAMES[mode];
+  $('modeBtn').textContent = MODE_NAMES[mode];
   if (!$('cmdPanel').hidden) renderCmd();
 }
 $('modeBtn').addEventListener('click', e => {
@@ -2071,34 +2054,12 @@ $('restartBtn').addEventListener('click', e => {
   for (const k in keys) keys[k] = false;
   reset(); syncTouchUI(true);
 });
-// Maintien au sol avec ↓ : activé / désactivé (mémorisé, sans recommencer la partie)
-function showGrip() { $('gripBtn').textContent = '↓ colle : ' + (grip ? 'oui' : 'non'); }
-$('gripBtn').addEventListener('click', e => {
-  e.currentTarget.blur();
-  grip = !grip;
-  try { localStorage.setItem('bmx-grip', grip ? 'on' : 'off'); } catch (err) {}
-  showGrip();
-  msg = grip ? '↓ maintient le vélo au sol' : '↓ ne maintient plus le vélo au sol'; msgT = 2;
-});
-showGrip();
-// Rôle de ↑ : tendre les jambes doucement ou sauter (mémorisé, sans recommencer la partie)
-function showUp() {
-  $('upBtn').textContent = '↑ : ' + (upJump ? 'sauter' : 'tendre');
-  $('tbJump').textContent = upJump ? '↑ SAUT' : 'POUSSER';
-  if (!$('cmdPanel').hidden) renderCmd();
-}
-$('upBtn').addEventListener('click', e => {
-  e.currentTarget.blur();
-  upJump = !upJump; prevUp = !!keys.ArrowUp;
-  try { localStorage.setItem('bmx-up', upJump ? 'jump' : 'push'); } catch (err) {}
-  showUp();
-  msg = upJump ? '↑ fait sauter' : '↑ tend les jambes doucement'; msgT = 2;
-});
-showUp();
+// Reculer le temps de 5 s (comme P)
+$('rewBtn').addEventListener('click', e => { e.currentTarget.blur(); if (!replay) rewind(5); });
 // Profil des bosses d'appel : parabole → arc de cercle (hauteur, angle) → arc de cercle (charge ≤ 2,5 g) ;
 // s'applique aux sauts pas encore affichés (comme les curseurs de hauteur, longueur et angle)
 const KICK_NAMES = { parabole: 'parabole', cercle: 'cercle (H, α)', g: 'cercle ≤ ' + String(KICK_G_MAX).replace('.', ',') + ' g' };
-function showKick() { $('kickBtn').textContent = 'Appel : ' + KICK_NAMES[kickMode]; }
+function showKick() { $('kickBtn').textContent = KICK_NAMES[kickMode]; }
 $('kickBtn').addEventListener('click', e => {
   e.currentTarget.blur();
   kickMode = KICK_MODES[(KICK_MODES.indexOf(kickMode) + 1) % KICK_MODES.length];
@@ -2111,7 +2072,7 @@ $('kickBtn').addEventListener('click', e => {
 showKick();
 const LAND_NAMES = { 1: 'angle de la lèvre', 1.4: 'rayon × 1,4', 2: 'rayon × 2', 4: 'rayon × 4',
                      '4H': 'longueur 4 H', var: 'courbure variable' };
-function showLand() { $('landBtn').textContent = 'Réception : ' + LAND_NAMES[landMode]; }
+function showLand() { $('landBtn').textContent = LAND_NAMES[landMode]; }
 $('landBtn').addEventListener('click', e => {
   e.currentTarget.blur();
   landMode = LAND_MODES[(LAND_MODES.indexOf(landMode) + 1) % LAND_MODES.length];
