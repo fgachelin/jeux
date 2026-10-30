@@ -58,11 +58,15 @@
   .tb.small { width: var(--s); height: var(--s); font-size: clamp(9px, 2.4vmin, 12px); }
   #touch .fig { opacity: 0.45; }
   #touch.air .fig { opacity: 1; }
-  /* à droite, disposition des flèches d'un clavier : ↑ SAUT au-dessus, puis ← FREIN, ↓ BAS, → PÉDALER */
+  /* modes trail : pas de pédalage (ni de frein, sauf « trail avec freins ») au sol ; ces boutons servent à pivoter en l'air */
+  #touch.nogas:not(.air) #tbGas, #touch.nobrake:not(.air) #tbBrake { opacity: 0.25; }
+  /* à droite, disposition des flèches d'un clavier : ↑ POUSSER au-dessus, puis ← FREIN, ↓ BAS, → PÉDALER */
   #tbGas   { right: var(--pr); bottom: var(--pb); }
   #tbDown  { right: calc(var(--pr) + var(--b) + 8px); bottom: var(--pb); }
   #tbBrake { right: calc(var(--pr) + (var(--b) + 8px) * 2); bottom: var(--pb); }
   #tbJump  { right: calc(var(--pr) + var(--b) + 8px); bottom: calc(var(--pb) + var(--b) + 8px); }
+  /* SAUT au-dessus de PÉDALER, à côté de POUSSER */
+  #tbHop   { right: var(--pr); bottom: calc(var(--pb) + var(--b) + 8px); }
   /* figures en bas à gauche */
   #figs { position: absolute; left: var(--pl); bottom: var(--pb); display: grid;
           grid-template-columns: repeat(4, var(--s)); gap: 8px; pointer-events: none; }
@@ -150,6 +154,12 @@
 <body>
 <canvas id="c"></canvas>
 <div id="topBtns">
+  <button id="kickBtn" class="btn">Appel : parabole</button>
+  <button id="landBtn" class="btn">Réception : lèvre</button>
+  <button id="upBtn" class="btn">↑ : tendre</button>
+  <button id="gripBtn" class="btn">↓ colle : oui</button>
+  <button id="restartBtn" class="btn">Nouvelle partie</button>
+  <button id="modeBtn" class="btn">Mode : normal</button>
   <button id="cmdBtn" class="btn">Commandes</button>
   <button id="menuBtn" class="btn" hidden>☰ Réglages</button>
 </div>
@@ -167,11 +177,12 @@
     <button class="tb small fig" data-key="b">Bar&shy;spin</button>
     <button class="tb small fig" data-key="t">Tail&shy;whip</button>
     <button class="tb small fig" data-key="m">Main</button>
-    <button class="tb small fig" data-key="p">Pied</button>
+    <button class="tb small fig" data-key="f">Pied</button>
     <button class="tb small fig" data-key="s">Super&shy;man</button>
   </div>
   <button class="tb big" id="tbDown" data-key="ArrowDown">BAS</button>
-  <button class="tb big" id="tbJump" data-key="ArrowUp">SAUT</button>
+  <button class="tb big" id="tbJump" data-key="ArrowUp">POUSSER</button>
+  <button class="tb big" id="tbHop" data-key=" ">SAUT</button>
 </div>
 
 <div id="replayBar" hidden>
@@ -216,7 +227,6 @@
     <button class="btn" id="bPadReset" tabindex="-1">Manette par défaut</button>
   </div>
   <div class="btnrow">
-    <button class="btn" id="bNew">Nouvelle partie</button>
     <button class="btn" id="bReplay">Replay</button>
     <button class="btn" id="bFull">Plein écran</button>
   </div>
@@ -230,6 +240,9 @@
   <label><div class="row">Frottement de l'air : <b id="dragVal">1.00</b></div>
   <input id="dragRange" type="range" min="0" max="1" step="0.05" value="1"></label>
   <div class="hint"><span>0 : aucun</span><span>1 : réaliste</span></div>
+
+  <label class="row" style="display:block"><input id="pumpAid" type="checkbox" style="width:auto;margin:0 4px 0 0">Aide au pompage</label>
+  <div class="hint"><span>piste bleue : ↓ fait gagner · orange : ↑</span></div>
 
   <div class="row">Hauteur des sauts : <b id="hRangeVal"></b></div>
   <div class="dual" id="hRange"><div class="track"></div><div class="fill"></div>
@@ -299,21 +312,46 @@ resize();
 // ---------- Constantes (40 px = 1 m) ----------
 const PX_PER_M = 40;
 const G = 9.8 * PX_PER_M;
-const WHEEL_R = 13;
+// BMX 24 pouces (cruiser) : roues de 0,305 m de rayon (pneu compris), empattement de 1,05 m
+const WHEEL_R = 0.305 * PX_PER_M;
+const HALF_WB = 0.525 * PX_PER_M;   // demi-empattement : les axes sont à ±HALF_WB du milieu du vélo
 const PEDAL_ACC = 170, V_PEDAL_MAX = 440;
-const BRAKE_ACC = 380;
+const BRAKE_ACC = 0.6 * G;           // frein arrière seul : ~0,6 g (le transfert de charge vers l'avant limite l'adhérence)
 const V_CREEP = 10 / 3.6 * PX_PER_M;  // vitesse minimale en montée en pédalant (10 km/h le long de la pente)
 const ROLL = 8;
-// Traînée réaliste : ½·ρ·SCx·v²/m avec ρ = 1,2 kg/m³, SCx ≈ 0,5 m² (pilote debout), m ≈ 80 kg
-// → 0,00375 /m, soit 0,00375 / 40 en unités pixel
-const DRAG_REAL = 0.00375 / PX_PER_M;
+// Traînée réaliste : ½·ρ·SCx·v²/m avec ρ = 1,2 kg/m³, SCx ≈ 0,5 m² (pilote debout), m = 75 kg (pilote + vélo)
+// → 0,004 /m, soit 0,004 / 40 en unités pixel
+const DRAG_REAL = 0.004 / PX_PER_M;
 const TRAIL_SLOPE = 0.05;            // pente générale de la piste vers la droite (5 %, ~2,9°)
-// impulsion verticale du saut : 2 m/s sans détente (petit bunny hop) à 3,5 m/s détente complète (~0,6 m d'élévation)
-const JUMP_V_MIN = 2 * PX_PER_M, JUMP_V_MAX = 3.5 * PX_PER_M, JUMP_CHARGE_TIME = 1;
+// Détente : le pilote (M_RIDER) est relié au vélo (M_BIKE) par ses jambes, qui se tendent sur LEG_STROKE.
+// Seul le sol peut pousser l'ensemble : une extension ne compte que tant que les roues touchent.
+const M_RIDER = 65, M_BIKE = 11.5, M_RATIO = M_RIDER / (M_RIDER + M_BIKE);
+const LEG_STROKE = 0.40 * PX_PER_M;  // course des jambes, de compressé (0) à tendu (40 cm)
+// Trois positions :
+// - sans touche : jambes un peu fléchies (LEG_NEUTRAL de la course) et souples, elles encaissent le terrain ;
+// - ↓ maintenu : compressé (on tire le vélo vers soi), en ~0,16 s en l'air, ~0,27 s au sol ;
+// - ↑ maintenu : on pousse fort le vélo jusqu'aux jambes tendues, sans sauter (pomper dans les descentes et les creux).
+// La position souple est tenue par un ressort amorti (pulsation LEG_W_SOFT en rad/s, amortissement LEG_Z_SOFT) ;
+// se compresser et pousser se font à fond, le plus vite possible (voir legs)
+const LEG_NEUTRAL = 0.75, LEG_W_SOFT = 16, LEG_Z_SOFT = 0.7;   // position souple : 30 cm sur 40
+const LEG_AIR_ACC = 12 * G;          // en l'air, accélération du corps par rapport au vélo : changement de position en ~0,1 s
+const LEG_U_END = 0.3 * PX_PER_M;    // ↑ maintenu au sol : vitesse max du corps en arrivant jambes tendues (vélo non arraché)
+const LEG_HOLD_MAX = 3.5;            // force max des jambes pour tenir la posture (× poids du pilote)
+const LEG_PULL_MAX = 1.5;            // force max pour tirer le vélo vers soi (bras et jambes) en se compressant (× poids)
+// saut (Espace) : détente explosive jusqu'à la butée des jambes, qui dépasse la charge subie (pesanteur apparente)
+// de 1,3 fois le poids sans détente chargée à 2,5 fois avec ↓ maintenu 1 s, dans la limite de POP_FORCE_MAX = 3,5 fois
+// le poids (force d'un saut vertical : 2,5 à 3,5 fois le poids). Le saut part de la position du moment : bien
+// compressé, il dispose de toute la course des jambes ; depuis la position souple, il reste un petit saut.
+// Sur le plat, compressé : bunny hop de ~0,45 à ~0,7 m (bon pilote : 0,5 à 0,8 m).
+// ↑ maintenu (pousser) va jusqu'à POP_FORCE_MAX aussi, mais en freinant avant la butée : les roues restent au sol
+const POP_NET_MIN = 1.3, POP_NET_MAX = 2.5, POP_FORCE_MAX = 3.5, JUMP_CHARGE_TIME = 1;
 const JUMP_GRACE = 0.3;              // délai pendant lequel la détente reste chargée après avoir lâché ↓
+const POP_LAUNCH = 0.4 * PX_PER_M;   // vitesse min donnée au vélo par des jambes arrivant en butée pour qu'il décolle
 const LANDING_BONUS = 0.15;          // gain de vitesse max pour une réception parfaitement parallèle au sol
-const PUMP_GAIN = 0.55;
-const AIR_SPIN_ACC = 14, AIR_SPIN_MAX = 6;
+const DRAG_TUCK = 0.7;               // traînée (SCx) compressé / debout : ~0,35 m² au lieu de 0,5
+const PUMP_AID_K = 0.06 / PX_PER_M;  // courbure min colorée par l'aide au pompage (rayon < ~17 m)
+const AIR_SPIN_ACC = 14, AIR_SPIN_MAX = 6;   // en posture debout
+const I_TUCK = 0.6;                  // moment d'inertie de rotation compressé / debout
 // Figures en l'air
 const YAW_SPEED = 2 * Math.PI / 0.8;            // rotation R : un tour en 0,8 s tant que la touche est enfoncée
 const WHIP_SPEED = 2 * Math.PI / 0.45;          // un tailwhip en 0,45 s
@@ -343,6 +381,16 @@ dragRange.addEventListener('input', () => {
   try { localStorage.setItem('bmx-drag', dragFactor); } catch (e) {}
 });
 dragRange.addEventListener('change', () => dragRange.blur());
+
+// Aide au pompage : colore la piste là où se compresser (↓) ou pousser (↑) fait gagner de la vitesse
+let pumpAid = true;
+const pumpAidBox = document.getElementById('pumpAid');
+try { const s = localStorage.getItem('bmx-pumpaid'); if (s !== null) pumpAid = s === '1'; } catch (e) {}
+pumpAidBox.checked = pumpAid;
+pumpAidBox.addEventListener('change', () => {
+  pumpAid = pumpAidBox.checked; pumpAidBox.blur();
+  try { localStorage.setItem('bmx-pumpaid', pumpAid ? '1' : '0'); } catch (e) {}
+});
 const lerp = (a, b, t) => a + (b - a) * t;
 
 // Curseurs doubles hauteur / longueur / angle des sauts ; renvoie une fonction qui lit [min, max]
@@ -388,11 +436,71 @@ function addSeg(len, f) {
   len = Math.round(len);
   for (let i = 0; i < len; i++) heights.push(baseH + f(i / len));
 }
+// Profil des bosses d'appel (bouton « Appel ») :
+// - 'parabole' : profil Hk·t², rayon serré au pied (≈ 2·Hk / (tan α + pente)²), plus grand à la lèvre (÷ cos³ α) ;
+// - 'cercle' : arc de cercle de rayon constant, déduit de la hauteur et de l'angle (le plus grand rayon possible) ;
+// - 'g' : arc de cercle dont le rayon limite la charge à KICK_G_MAX à la vitesse de croisière KICK_V ; si l'arc
+//   de la hauteur et de l'angle demandés est plus serré, on garde la hauteur et la lèvre est moins inclinée.
+const KICK_MODES = ['parabole', 'cercle', 'g'];
+const KICK_V = 35 / 3.6 * PX_PER_M;   // vitesse de croisière (35 km/h)
+const KICK_G_MAX = 2.5;               // charge maximale au pied : pesanteur + v²/r ≤ 2,5 g
+let kickMode = 'parabole';
+try { const m = localStorage.getItem('bmx-kick'); if (KICK_MODES.includes(m)) kickMode = m; } catch (e) {}
+// Arc de cercle de rayon r, tangent à la piste au pied (pente −TRAIL_SLOPE), jusqu'à l'angle de lèvre a :
+// hauteur gagnée au-dessus de la pente générale (comme Hk) et longueur horizontale
+const arcRise = (r, a) => { const a0 = -Math.atan(TRAIL_SLOPE);
+  return r * (Math.cos(a0) - Math.cos(a)) + TRAIL_SLOPE * r * (Math.sin(a) - Math.sin(a0)); };
+// Pente de réception (bouton « Réception ») de hauteur H, toujours creuse, tangente au sol en bas, sans partie
+// droite ni bombée. ρ₁ = H / (1 − cos α) est le rayon de l'arc de cercle qui arrive en haut avec l'angle α de la
+// lèvre (par rapport à la pente générale) : le plus grand rayon minimal possible pour cette hauteur et cet angle.
+// - '1', '1.4', '2', '4' : arc de cercle de rayon k·ρ₁ ; k > 1 adoucit la réception mais la rend plus plate en
+//   haut (cos b = 1 − H / (k·ρ₁)) ;
+// - '4H' : arc de cercle de longueur 4·H, de rayon (H² + L²) / 2H ;
+// - 'var' : courbure variable y = H·u^m (u = 1 en haut, 0 au sol), longueur 4·H : l'angle de la lèvre en haut,
+//   rayon le plus serré dans le haut de la pente (un peu sous ρ₁), puis de plus en plus grand jusqu'au sol.
+const LAND_MODES = ['1', '1.4', '2', '4', '4H', 'var'];
+let landMode = '1';
+try { const m = localStorage.getItem('bmx-land'); if (LAND_MODES.includes(m)) landMode = m; } catch (e) {}
+// Renvoie la longueur horizontale L et y(x), x de 0 à L depuis le haut, y de H à 0 (hauteur au-dessus de la pente générale)
+function landingProfile(H, ang) {
+  const a = Math.min(1.4, Math.max(0.1, ang - Math.atan(TRAIL_SLOPE)));
+  if (landMode === '4H') { const L = 4 * H; return arcProfile((H * H + L * L) / (2 * H), L); }
+  if (landMode === 'var') {
+    // pente en haut H·m / L = tan α ; m ≥ 2 pour que la courbure reste finie au sol
+    const m = Math.max(2, 4 * Math.tan(a)), L = m * H / Math.tan(a);
+    return { L, f: x => H * Math.pow(Math.max(0, L - x) / L, m) };
+  }
+  const rho = +landMode * H / (1 - Math.cos(a));
+  return arcProfile(rho, rho * Math.sin(Math.acos(1 - H / rho)));
+}
+const arcProfile = (rho, L) => ({ L, f: x => rho - Math.sqrt(Math.max(0, rho * rho - (L - x) * (L - x))) });
+function addLanding(H, ang) { const p = landingProfile(H, ang); addSeg(p.L, t => p.f(t * p.L)); }
+// face montante d'une butte de réception, de hauteur H sur la longueur L : arc de cercle creux depuis le sol
+// (ρ = (H² + L²) / 2H, L ≥ H)
+function addFace(H, L) { const p = arcProfile((H * H + L * L) / (2 * H), L); addSeg(L, t => p.f((1 - t) * L)); }
 // Bosse d'appel de hauteur Hk dont la pente finale fait l'angle ang avec l'horizontale
-// (profil Hk·t² : pente finale 2·Hk/R, en tenant compte de la pente générale de la piste)
 function addKicker(Hk, ang) {
-  addSeg(2 * Hk / (Math.tan(ang) + TRAIL_SLOPE), t => Hk * t * t);
+  if (kickMode === 'parabole') {
+    // pente finale 2·Hk/R, en tenant compte de la pente générale de la piste
+    addSeg(2 * Hk / (Math.tan(ang) + TRAIL_SLOPE), t => Hk * t * t);
+  } else {
+    let r = Hk / arcRise(1, ang);
+    if (kickMode === 'g') {
+      const rG = KICK_V * KICK_V / ((KICK_G_MAX - 1) * G);
+      if (rG > r) {
+        // rayon imposé : angle de lèvre tel que l'arc atteigne la hauteur Hk (recherche par dichotomie)
+        r = rG;
+        let lo = 0, hi = ang;
+        for (let k = 0; k < 40; k++) { const m = (lo + hi) / 2; if (arcRise(r, m) < Hk) lo = m; else hi = m; }
+        ang = (lo + hi) / 2;
+      }
+    }
+    const s0 = Math.sin(-Math.atan(TRAIL_SLOPE)), c0 = Math.cos(-Math.atan(TRAIL_SLOPE));
+    const X = r * (Math.sin(ang) - s0);
+    addSeg(X, t => { const x = t * X, sn = x / r + s0; return r * (c0 - Math.sqrt(1 - sn * sn)) + TRAIL_SLOPE * x; });
+  }
   lips.push({ x: heights.length, ang, dir: 1 });
+  return ang;   // angle de lèvre effectif (réduit en mode 'g')
 }
 // Repère les lèvres d'envol dans le terrain ajouté depuis `start` : un point où, dans le sens de roulage d, la pente
 // montante (> 8,5°) casse net (chute de plus de 0,3). Une cassure s'étend sur plusieurs points ; on garde le plus haut.
@@ -435,24 +543,26 @@ function addProc(kind, sc) {
 }
 function addProcShape(kind, sc) {
   if (kind === 'rollers') {
-    const n = 2 + Math.floor(Math.random() * 3), L = rnd(140, 180) * sc, A = rnd(18, 32) * sc;
+    // whoops de 6 à 9 m : assez longues pour être pompées à la vitesse de croisière (30 à 40 km/h) ;
+    // plus courtes, le vélo décolle à chaque sommet et retombe sur la face montante de la suivante
+    const n = 2 + Math.floor(Math.random() * 3), L = rnd(6, 9) * PX_PER_M * sc, A = rnd(18, 32) * sc;
     for (let k = 0; k < n; k++) addSeg(L, t => A * (1 - Math.cos(2 * Math.PI * t)) / 2);
   } else if (kind === 'table') {
     // tabletop : la longueur du saut est celle de la table
     const Hk = jumpHeight() * sc;
-    addKicker(Hk, jumpAngle());
+    const ang = addKicker(Hk, jumpAngle());
     addSeg(jumpLength() * sc, () => Hk);
-    addSeg(Hk * rnd(3.3, 4.3), t => Hk * (1 + Math.cos(Math.PI * t)) / 2);
+    addLanding(Hk, ang);
   } else {
     // double : kicker, trou, réception ; la longueur va du sommet du kicker au sommet de la réception
     const Hk = jumpHeight() * sc;
     const back = Math.max(30, 0.9 * Hk), face = Math.max(35, Hk);
     const gap = Math.max(0, jumpLength() * sc - back - face);
-    addKicker(Hk, jumpAngle());
+    const ang = addKicker(Hk, jumpAngle());
     addSeg(back, t => Hk * (1 - smooth(t)));
     addSeg(gap, () => 0);
-    addSeg(face, t => 0.9 * Hk * smooth(t));
-    addSeg(0.9 * Hk * rnd(3.8, 4.8), t => 0.9 * Hk * (1 + Math.cos(Math.PI * t)) / 2);
+    addFace(0.9 * Hk, face);
+    addLanding(0.9 * Hk, ang);
   }
 }
 
@@ -549,17 +659,19 @@ const keys = {};
 function keyDown(key, repeat, time) {
   if (key === 'l' || key === 'L') { if (!repeat) toggleReplay(); return; }
   if (replay) return;   // pendant le replay, les commandes du jeu sont ignorées
-  if (key === 'ArrowUp' && !keys.ArrowUp) wantJump = true;
+  // P : reculer le temps de 5 s
+  if (key === 'p' || key === 'P') { if (!repeat) rewind(5); return; }
+  if (key === ' ' && !keys[' ']) wantJump = true;   // Espace : sauter
   if (key === 'n' || key === 'N') reset();
   // X : au sol et à l'arrêt = avancer de 10 m ; en l'air = x-up (géré dans step)
   if ((key === 'x' || key === 'X') && !repeat && !p.air) skipAhead();
-  // figures : m / m+m = une / deux mains et p / p+p = un / deux pieds, lâchés tant que la touche reste enfoncée
+  // figures : m / m+m = une / deux mains et f / f+f = un / deux pieds, lâchés tant que la touche reste enfoncée
   // (le 2e appui rapproché donne « deux ») ; t / t+t = tailwhip simple / double (en l'air)
   const k = key.toLowerCase();
   if (!repeat) {
     const t = time / 1000;
     if (k === 'm') { handsMode = t - lastTap.m < DOUBLE_TAP ? 2 : 1; lastTap.m = t; }
-    if (k === 'p') { feetMode = t - lastTap.p < DOUBLE_TAP ? 2 : 1; lastTap.p = t; }
+    if (k === 'f') { feetMode = t - lastTap.f < DOUBLE_TAP ? 2 : 1; lastTap.f = t; }
     if (k === 't' && p.air && p.crashed <= 0) { if (!p.whipN) p.whipN = 1; else if (p.whipN === 1) p.whipN = 2; }
     if (k === 'b' && p.air && p.crashed <= 0 && !p.spinOn) p.spinOn = true;
   }
@@ -571,10 +683,11 @@ addEventListener('keydown', e => {
   // manette configurée : les touches que le navigateur fabrique à partir des boutons de la manette sont ignorées
   if (controlMode === 'pad' && padCustom) { if (e.key !== 'Escape' && e.key !== 'F5') e.preventDefault(); return; }
   if (e.key === 'e' || e.key === 'E') { openEditor(); return; }
-  if (e.key.startsWith('Arrow')) e.preventDefault();
+  // flèches et Espace : pas de défilement de la page, ni de clic sur le bouton qui aurait le focus
+  if (e.key.startsWith('Arrow') || e.key === ' ') e.preventDefault();
   keyDown(e.key, e.repeat, e.timeStamp);
 });
-addEventListener('keyup', e => { keys[e.key] = false; });
+addEventListener('keyup', e => { if (e.key === ' ' && !editorOpen) e.preventDefault(); keys[e.key] = false; });
 
 // ---------- Manette PlayStation (API Gamepad, disposition standard) ----------
 // chaque commande de la manette est traduite en touche du clavier, pour réutiliser toute la logique
@@ -583,10 +696,11 @@ const PAD_MAP = [
   ['ArrowLeft',  g => g.buttons[14]?.pressed || g.axes[0] < -0.5],   // ← croix / stick : pédaler vers la gauche, pivoter
   ['PadGas',     g => g.buttons[7]?.pressed],                         // R2 : pédaler dans le sens du vélo (en l'air : pivoter horaire)
   ['PadBrake',   g => g.buttons[6]?.pressed],                         // L2 : freiner (en l'air : pivoter anti-horaire)
-  ['ArrowUp',    g => g.buttons[12]?.pressed || g.buttons[0]?.pressed],                       // ↑ croix / bouton Croix : sauter
+  ['ArrowUp',    g => g.buttons[12]?.pressed],                       // ↑ croix : pousser, jambes tendues
+  [' ',          g => g.buttons[0]?.pressed],                        // bouton Croix : sauter
   ['ArrowDown',  g => g.buttons[13]?.pressed || g.axes[1] > 0.5],                             // ↓ croix / stick : se baisser
   ['m', g => g.buttons[1]?.pressed],   // Rond : main(s)
-  ['p', g => g.buttons[2]?.pressed],   // Carré : pied(s)
+  ['f', g => g.buttons[2]?.pressed],   // Carré : pied(s)
   ['t', g => g.buttons[3]?.pressed],   // Triangle : tailwhip
   ['r', g => g.buttons[5]?.pressed],   // R1 : rotation 360
   ['x', g => g.buttons[4]?.pressed],   // L1 : x-up (en l'air), avancer de 10 m (à l'arrêt)
@@ -603,54 +717,91 @@ let padConnected = false;
 const PAD_ACTIONS = [
   { key: 'PadGas',    label: 'Pédaler (dans le sens du vélo) · en l\'air : pivoter ↻', tip: 'gâchette droite (R2)' },
   { key: 'PadBrake',  label: 'Freiner · en l\'air : pivoter ↺',                         tip: 'gâchette gauche (L2)' },
-  { key: 'ArrowUp',   label: 'Sauter',                                                   tip: 'bouton R1' },
-  { key: 'ArrowDown', label: 'Se baisser (pomper, charger la détente)',                  tip: 'bouton L1' },
+  { key: ' ',         label: 'Sauter (plus haut après ↓ maintenu jusqu\'à 1 s)',        tip: 'bouton R1' },
+  { key: 'ArrowUp',   label: 'Pousser, jambes tendues (maintenir)',                      tip: 'bouton Croix' },
+  { key: 'ArrowDown', label: 'Se compresser (maintenir)',                                tip: 'bouton L1' },
   { key: 'r',         label: 'Rotation 360° (maintenir)',                                tip: 'stick gauche vers le haut' },
   { key: 'x',         label: 'X-up (maintenir) · à l\'arrêt : avancer de 10 m',          tip: 'stick gauche vers le bas' },
   { key: 'b',         label: 'Barspin',                                                  tip: 'stick droit vers le haut' },
   { key: 's',         label: 'Superman (maintenir)',                                     tip: 'stick droit vers le bas' },
   { key: 'm',         label: 'Lâcher une main (deux appuis rapides = deux mains)',       tip: 'stick droit vers la gauche' },
-  { key: 'p',         label: 'Lâcher un pied (deux appuis rapides = deux pieds)',        tip: 'stick droit vers la droite' },
+  { key: 'f',         label: 'Lâcher un pied (deux appuis rapides = deux pieds)',        tip: 'stick droit vers la droite' },
   { key: 't',         label: 'Tailwhip (deux appuis rapides = double)',                  tip: 'bouton R3 (clic du stick droit)' },
   { key: 'l',         label: 'Replay de la dernière série',                            tip: 'bouton L3 (clic du stick gauche)' },
   { key: 'n',         label: 'Nouvelle partie',                                          tip: 'bouton Options' },
 ];
-let padCustom = null;
+let padCustom = null, padCustomId = null;   // padCustomId : nom de la manette sur laquelle la disposition a été enregistrée
 try { const s = JSON.parse(localStorage.getItem('bmx-padmap')); if (s && typeof s === 'object') padCustom = s; } catch (e) {}
+try { padCustomId = localStorage.getItem('bmx-padid'); } catch (e) {}
 const specOn = (s, g) => s.t === 'b' ? !!(g.buttons[s.i] && g.buttons[s.i].pressed) : ((g.axes[s.i] || 0) - s.base) * s.s > 0.6;
-let padEntries = PAD_MAP;
+let customEntries = [], padKeys = [];
 function applyPadCustom() {
-  padEntries = padCustom ? Object.entries(padCustom).map(([k, s]) => [k, g => specOn(s, g)]) : PAD_MAP;
+  // anciennes dispositions : la figure « pied » s'appelait p (devenu « reculer de 5 s »)
+  if (padCustom && padCustom.p && !padCustom.f) { padCustom.f = padCustom.p; delete padCustom.p; }
+  customEntries = padCustom ? Object.entries(padCustom).map(([k, s]) => [k, g => specOn(s, g)]) : [];
+  padKeys = [...new Set([...PAD_MAP, ...customEntries].map(e => e[0]))];
   for (const k in padHeld) { if (padHeld[k]) keys[k] = false; padHeld[k] = false; }
 }
-function setPadCustom(m) {
-  padCustom = m;
-  try { if (m) localStorage.setItem('bmx-padmap', JSON.stringify(m)); else localStorage.removeItem('bmx-padmap'); } catch (e) {}
+function setPadCustom(m, id = null) {
+  padCustom = m; padCustomId = m ? id : null;
+  try {
+    if (m) localStorage.setItem('bmx-padmap', JSON.stringify(m)); else localStorage.removeItem('bmx-padmap');
+    if (padCustomId) localStorage.setItem('bmx-padid', padCustomId); else localStorage.removeItem('bmx-padid');
+  } catch (e) {}
   applyPadCustom();
 }
 applyPadCustom();
 const getPads = () => navigator.getGamepads ? [...navigator.getGamepads()].filter(Boolean) : [];
+// Disposition utilisée pour chaque manette (plusieurs manettes peuvent être branchées, et marcher ensemble) :
+// - la manette sur laquelle « Configurer la manette » a été faite : sa disposition personnalisée
+//   (une ancienne configuration, sans nom de manette, s'applique à toutes) ;
+// - une manette standard (ex. manette Sony officielle) : la disposition par défaut ;
+// - une manette non standard (ex. manette non officielle) : ses numéros de boutons ne correspondent pas à la
+//   disposition par défaut, elle est ignorée tant qu'elle n'est pas configurée, sauf si c'est la seule manette
+function padEntriesFor(g, pads) {
+  if (padCustom && (!padCustomId || g.id === padCustomId)) return customEntries;
+  if (g.mapping === 'standard') return PAD_MAP;
+  return pads.some(q => q.mapping === 'standard' || (padCustom && q.id === padCustomId)) ? null : PAD_MAP;
+}
 function pollGamepad() {
   const pads = getPads();
   padConnected = pads.length > 0;
-  for (const [key, test] of padEntries) {
-    const on = pads.some(g => test(g));
-    if (on && !padHeld[key]) keyDown(key, false, performance.now());
-    if (!on && padHeld[key]) keys[key] = false;
-    padHeld[key] = on;
+  const on = {};
+  for (const g of pads) for (const [key, test] of padEntriesFor(g, pads) || []) if (test(g)) on[key] = true;
+  for (const key of padKeys) {
+    if (on[key] && !padHeld[key]) keyDown(key, false, performance.now());
+    if (!on[key] && padHeld[key]) keys[key] = false;
+    padHeld[key] = !!on[key];
   }
 }
 let wantJump = false;
 let handsMode = 1, feetMode = 1;
-const lastTap = { m: -1, p: -1 };
+const lastTap = { m: -1, f: -1 };
 const held = k => keys[k] || keys[k.toUpperCase()];
 // au sol, on pédale avec la flèche du côté où regarde le vélo (ou R2), on freine avec l'autre (ou L2)
-const gasOn = () => keys.PadGas || (p.dir > 0 ? keys.ArrowRight : keys.ArrowLeft);
-const brakeOn = () => keys.PadBrake || (p.dir > 0 ? keys.ArrowLeft : keys.ArrowRight);
+// Mode « trail » : ni pédalage ni frein, on ne roule que sur l'élan et la pente ; « trail avec freins » : pas de
+// pédalage, mais le frein reste (le record est séparé par mode)
+const MODES = ['normal', 'trail', 'trail-freins'];
+const MODE_NAMES = { normal: 'normal', trail: 'trail', 'trail-freins': 'trail avec freins' };
+let mode = 'normal';
+try { const m = localStorage.getItem('bmx-mode'); if (MODES.includes(m)) mode = m; } catch (e) {}
+let trail, trailBrakes;
+const applyMode = () => { trail = mode !== 'normal'; trailBrakes = mode === 'trail-freins'; };
+applyMode();
+const bestKey = () => mode === 'normal' ? 'bmx-best' : 'bmx-best-' + mode;
+// ↓ maintenu garde le vélo au sol (désactivable : le vélo décolle alors des bosses comme sans ↓)
+let grip = true;
+try { grip = localStorage.getItem('bmx-grip') !== 'off'; } catch (e) {}
+// rôle de ↑ : tendre les jambes doucement (pousser, sans sauter) ou sauter (comme Espace)
+let upJump = false, prevUp = false;
+try { upJump = localStorage.getItem('bmx-up') === 'jump'; } catch (e) {}
+const pushOn = () => !upJump && !!keys.ArrowUp;
+const gasOn = () => !trail && !!(keys.PadGas || (p.dir > 0 ? keys.ArrowRight : keys.ArrowLeft));
+const brakeOn = () => (!trail || trailBrakes) && !!(keys.PadBrake || (p.dir > 0 ? keys.ArrowLeft : keys.ArrowRight));
 
 // ---------- État ----------
 let p, best = 0, msg = '', msgT = 0, particles = [];
-try { best = +localStorage.getItem('bmx-best') || 0; } catch (e) {}
+try { best = +localStorage.getItem(bestKey()) || 0; } catch (e) {}
 // Zoom de l'image : pincer avec deux doigts sur l'écran tactile (mémorisé)
 let zoom = 1;
 try { zoom = Math.min(2.5, Math.max(0.4, +localStorage.getItem('bmx-zoom') || 1)); } catch (e) {}
@@ -677,7 +828,7 @@ cv.addEventListener('pointerdown', e => {
   const r = resetRec;
   if (!r || replay || e.clientX < r.x || e.clientX > r.x + r.w || e.clientY < r.y || e.clientY > r.y + r.h) return;
   best = 0;
-  try { localStorage.setItem('bmx-best', best); } catch (err) {}
+  try { localStorage.setItem(bestKey(), best); } catch (err) {}
 });
 
 // ---------- Rampe de départ ----------
@@ -718,11 +869,18 @@ function reset() {
   heights = []; segStarts = []; segBase = []; lips = []; baseH = 0;
   addStartRamp();
   rec = []; recDur = 0; recording = false; replay = null;   // le replay ne remonte pas avant une nouvelle partie
+  hist = []; simT = 0;
   downHold = 0; downGrace = 0;
-  p = { x: 100, y: 0, v: 0, vx: 0, vy: 0, air: false, ang: 0, crouch: 0,
-        crank: 0, wheel: 0, crashed: 0, maxX: 100, x0: 100, airTime: 0,
+  // h : extension des jambes (0 compressé → LEG_STROKE tendu), u : vitesse du corps par rapport au vélo,
+  // pop : force de la détente rapide en cours (× poids, 0 = aucune), lock : vitesse du corps quand les jambes arrivent
+  // en butée, I : moment d'inertie de rotation relatif (1 = debout)
+  // mode trail : sans pédalage, on part déjà sur la pente de la rampe (la plateforme est plate)
+  const x0 = trail ? RAMP_PLATFORM + 20 : 100;
+  p = { x: x0, y: 0, v: 0, vx: 0, vy: 0, air: false, ang: 0, crouch: 0,
+        h: LEG_STROKE, u: 0, uG: 0, pop: 0, lock: 0, I: 1,
+        crank: 0, wheel: 0, crashed: 0, maxX: x0, x0, airTime: 0,
         av: 0, rot: 0, crashRot: 0, crashTarget: 0, dir: 1,
-        segI: 0, entry: { x: 100, v: 180 } };   // entry : début de l'élément de piste en cours et vitesse en y entrant
+        segI: 0, entry: { x: x0, v: 180 } };   // entry : début de l'élément de piste en cours et vitesse en y entrant
   clearTricks();
   p.y = ground(p.x);
   camX = 0; camY = p.y; camLead = 0.3;
@@ -737,18 +895,20 @@ function respawn() {
   p.x = Math.max(100, p.entry.x - 40);
   p.y = ground(p.x); p.v = Math.max(180, p.entry.v); p.air = false; p.ang = slope(p.x);
   p.crashed = 0; p.av = 0; p.crashRot = 0; p.dir = 1;
+  p.h = LEG_STROKE; p.u = 0; p.uG = 0; p.pop = 0; p.crouch = 0;
 }
 
 // Points du vélo et du pilote (repère local : origine entre les deux roues au sol, y vers le bas)
 function bodyPoints(c) {
   const pts = [];
-  for (const cx of [-20, 20])
+  for (const cx of [-HALF_WB, HALF_WB])
     for (let k = 0; k < 8; k++) {
       const a = k * Math.PI / 4;
       pts.push([cx + Math.cos(a) * WHEEL_R, -WHEEL_R + Math.sin(a) * WHEEL_R]);
     }
-  const hx = 11 + 4 * c, hy = -77 + 16 * c;
-  pts.push([hx, hy - 9], [hx + 8, hy], [hx - 8, hy], [11, -38], [5 + 2 * c, -68 + 15 * c], [-5 - 4 * c, -49 + 11 * c]);
+  // tête, épaules et hanches descendent de toute la course des jambes en se compressant (comme dans drawRider)
+  const hx = 11 + 4 * c, hy = -77 + LEG_STROKE * c;
+  pts.push([hx, hy - 9], [hx + 8, hy], [hx - 8, hy], [11, -38], [5 + 2 * c, -68 + LEG_STROKE * c], [-5 - 4 * c, -49 + LEG_STROKE * c]);
   return pts;
 }
 // De combien le point le plus bas passe sous la ligne du sol (> 0 = pénétration)
@@ -777,9 +937,98 @@ function clearTricks() {
   Object.assign(p, { yaw: 0, whip: 0, whipN: 0, hands: 0, feet: 0, bar: 0, spin: 0, spinOn: false, sup: 0 });
   p.tr = { hands: 0, feet: 0, whips: 0, xup: false, spins: 0, superman: false };
 }
-function startAir() {
-  p.air = true; p.airTime = 0; p.av = 0; p.rot = 0;
+// Décollage ; vx, vy : vitesse du vélo, nx, ny : normale au sol au point de départ.
+// vitesse du centre de gravité = vitesse du vélo + M_RATIO × vitesse du corps par rapport au vélo (lock : jambes
+// arrivées en butée) : se tendre au moment où les roues quittent le sol fait monter plus haut, se compresser
+// (le corps descend vers le vélo) fait monter moins haut
+// (p.uG : vitesse du corps au dernier instant où les jambes poussaient contre le sol ; un mouvement des jambes sans
+// appui, sur l'arête d'une lèvre par exemple, ne change pas la trajectoire de l'ensemble)
+function startAir(vx, vy, nx, ny) {
+  const b = M_RATIO * ((p.uG || 0) + p.lock);
+  p.vx = vx + nx * b; p.vy = vy + ny * b;
+  p.air = true; p.airTime = 0; p.av = 0; p.rot = 0; p.lock = 0; p.I = inertia();
   clearTricks();
+}
+// moment d'inertie relatif : le pilote compressé est ramassé près du centre de rotation
+const inertia = () => lerp(1, I_TUCK, p.crouch);
+// Portions survolées en sautant dans le sens d, entre lo et hi : de chaque lèvre d'envol jusqu'au haut de la
+// réception (premier endroit qui redescend franchement à peu près à la hauteur de la lèvre), au plus 40 m plus loin
+function flightZones(lo, hi, d) {
+  const zones = [], h = x => ground(x) + TRAIL_SLOPE * x;   // hauteur sans la pente générale de la piste
+  for (const k of lips) {
+    if (k.dir !== d || k.x < lo - 40 * PX_PER_M || k.x > hi + 40 * PX_PER_M) continue;
+    const h0 = h(k.x), end = k.x + d * 40 * PX_PER_M;
+    let x = k.x + d * 0.5 * PX_PER_M;
+    for (; d > 0 ? x < end : x > end; x += 3 * d)
+      if ((h(x + 3 * d) - h(x)) / 3 < -0.1 && h(x) > h0 - 0.25 * PX_PER_M) break;
+    zones.push([Math.min(k.x - 8 * d, x), Math.max(k.x - 8 * d, x)]);
+  }
+  return zones;
+}
+// Courbure du sol (1/px) : > 0 dans un creux (le sol appuie plus), < 0 sur une bosse ; bornée à un rayon de 0,5 m
+function curvature(x) {
+  const d1 = (ground(x + 6) - ground(x - 6)) / 12, d2 = (ground(x + 6) - 2 * ground(x) + ground(x - 6)) / 36;
+  return Math.max(-0.05, Math.min(0.05, d2 / Math.pow(1 + d1 * d1, 1.5)));
+}
+// Courbure vue par la dynamique au sol : bornée à K_DYN (rayon ≥ 1,25 m), et nulle à moins de 12 px d'une lèvre
+// d'envol dans le sens de roulage d (l'envol y est un événement ; mesurée sur quelques pixels, la courbure y verrait
+// une arête)
+const K_DYN = 0.8 / PX_PER_M;
+function dynCurv(x, d) {
+  for (let i = lips.length - 1; i >= 0; i--) {
+    const k = lips[i];
+    if (k.x < x - 3000) break;
+    if (k.dir === d && Math.abs(k.x - x) < 12) return 0;
+  }
+  return Math.max(-K_DYN, Math.min(K_DYN, curvature(x)));
+}
+// Posture du pilote, renvoie la variation d'extension des jambes.
+// Au sol, les jambes poussent le corps contre sa pesanteur apparente gEff (voir step : pesanteur + accélération
+// centripète), ou tirent le vélo vers lui pour se compresser vite ; forces plafonnées : à forte compression du sol,
+// le pilote est écrasé quoi qu'il fasse.
+// Contact (multiplicateur de Lagrange de la contrainte « le vélo est sur le sol ») : le sol pousse le vélo avec
+// N = M_BIKE·gBike + M_RIDER·F ≥ 0 (gBike : pesanteur apparente du vélo, F : force des jambes par kg de pilote).
+// Sur un sommet trop bombé (gBike < 0), le vélo ne reste au sol que si les jambes le poussent vers le bas
+// (absorption) ; sinon p.unload signale qu'il décolle, et pilote et vélo tombent ensemble.
+// En l'air, seule compte la position visée (les trois positions, voir LEG_NEUTRAL).
+// Détente rapide (p.pop : poussée nette au-delà de la charge, × poids) : jusqu'à la butée des jambes.
+function legs(dt, gEff, onGround, gBike = gEff) {
+  // position visée : ↑ maintenu (pousser) l'emporte sur ↓ maintenu (compressé) ; sans touche : souple
+  const D = LEG_STROKE, push = pushOn(), down = keys.ArrowDown && !push;
+  const pdSoft = LEG_W_SOFT * LEG_W_SOFT * (LEG_NEUTRAL * D - p.h) - 2 * LEG_Z_SOFT * LEG_W_SOFT * p.u;
+  // au sol, se compresser ne doit pas arracher le vélo : on le tire au plus de son poids apparent (sinon il décolle
+  // à chaque compression, et le pivot en l'air de la touche de pédalage amorce un frontflip)
+  const pull = onGround && gBike > 0 ? Math.min(LEG_PULL_MAX * G, M_BIKE / M_RIDER * gBike) : LEG_PULL_MAX * G;
+  // force des jambes au sol (par kg de pilote) :
+  // - ↑ maintenu : poussée maximale, puis freinage (pesanteur apparente + traction du vélo) juste à temps pour
+  //   arriver jambes tendues à moins de LEG_U_END, sans arracher le vélo ; jambes tendues : on tient la position ;
+  // - ↓ maintenu : on se laisse tomber en tirant le vélo vers soi, jusqu'à la butée (où le corps repose)
+  let F;
+  if (p.pop) F = Math.min(POP_FORCE_MAX * G, Math.max(0, gEff) + p.pop * G);
+  else if (push) F = D - p.h < 0.5 ? Math.max(-pull, gEff - 2 * LEG_W_SOFT * p.u)
+    : p.u < Math.sqrt(LEG_U_END * LEG_U_END + 2 * (Math.max(0, gEff) + pull) * (D - p.h)) ? POP_FORCE_MAX * G : -pull;
+  else if (down) F = p.h > 0.5 ? -pull : gEff;
+  else F = Math.min(LEG_HOLD_MAX * G, Math.max(-pull, gEff + pdSoft));
+  p.unload = onGround && M_RIDER * F + M_BIKE * gBike < -1;   // (tolérance d'arrondi : traction égale au poids du vélo)
+  // au sol : équation de Lagrange en h (ḧ = F − pesanteur apparente du corps) ;
+  // en l'air, rien ne retient les jambes : changement de position à fond, en freinant juste à temps
+  const acc = onGround && !p.unload ? F - gEff
+    : p.pop ? p.pop * G
+    : push ? (p.u < Math.sqrt(2 * LEG_AIR_ACC * (D - p.h)) ? LEG_AIR_ACC : -LEG_AIR_ACC)
+    : down ? (p.u > -Math.sqrt(2 * LEG_AIR_ACC * p.h) ? -LEG_AIR_ACC : LEG_AIR_ACC)
+    : pdSoft;
+  const h0 = p.h;
+  p.u += acc * dt;
+  p.h += p.u * dt;
+  p.lock = 0;
+  if (p.h <= 0) { p.h = 0; p.u = Math.max(0, p.u); }
+  // en butée, seule la détente rapide (explosive) arrache le vélo ; une poussée contrôlée s'arrête jambes tendues
+  // (une butée atteinte sans appui au sol n'arrache rien non plus)
+  const grounded = onGround && !p.unload;
+  if (p.h >= LEG_STROKE) { p.h = LEG_STROKE; p.lock = p.pop && grounded ? Math.max(0, p.u) : 0; p.u = 0; p.pop = 0; }
+  if (grounded) p.uG = p.u;
+  p.crouch = 1 - p.h / LEG_STROKE;
+  return p.h - h0;
 }
 
 function crash(th) {
@@ -808,27 +1057,48 @@ function step(dt) {
     return;
   }
   const down = keys.ArrowDown;
-  p.crouch += ((down ? 1 : 0) - p.crouch) * Math.min(1, dt * 12);
   // détente du saut : se charge pendant 1 s de ↓, reste chargée un court instant après l'avoir lâché
   if (down) { downHold += dt; downGrace = JUMP_GRACE; }
   else if ((downGrace -= dt) <= 0) downHold = 0;
+  // Espace : saut, d'autant plus fort que la détente est chargée (ne sert à rien jambes déjà tendues)
+  if (wantJump) { p.pop = lerp(POP_NET_MIN, POP_NET_MAX, jumpCharge()); downHold = 0; }
+  // traînée : le pilote compressé offre moins de surface au vent
+  const dragK = DRAG_REAL * dragFactor * lerp(1, DRAG_TUCK, p.crouch);
 
   if (!p.air) {
-    const th = slope(p.x);
-    let a = -G * Math.sin(th);
-    // pumping : on charge les descentes (dans le sens où l'on roule) en baissant le centre de gravité
-    if (down && p.v * a > 0) a += PUMP_GAIN * a;
+    // Au sol : lagrangien à deux coordonnées, s (abscisse du vélo le long du sol, vitesse ṡ = p.v) et h (extension
+    // des jambes le long de la normale n, vitesse ḣ = p.u), sous la contrainte « le vélo est sur le sol ».
+    // Le corps est en r_vélo + h·n, d'où sa vitesse ṡ·(1 − κh)·t + ḣ·n (κ : courbure, dn/ds = −κ·t), et
+    //   T = ½·M_BIKE·ṡ² + ½·M_RIDER·[(1 − κh)²·ṡ² + ḣ²],   V = (M_BIKE + M_RIDER)·g·y(s) + M_RIDER·g·h·cos θ
+    // Équation en h : ḧ = F − [g·cos θ + κ·(1 − κh)·ṡ²]   (F : force des jambes par kg de pilote, voir legs)
+    // Équation en s, avec l'inertie effective I = M_BIKE + M_RIDER·(1 − κh)² :
+    //   I·s̈ = Q − g·sin θ·(M_BIKE + M_RIDER·(1 − κh)) + 2·M_RIDER·(1 − κh)·κ·ḣ·ṡ + M_RIDER·(1 − κh)·κ'·h·ṡ²
+    // (Q : pédalage, frein, roulement, air). Le pompage en découle : se tendre dans un creux (κ > 0, ḣ > 0) ou se
+    // compresser sur une bosse (κ < 0, ḣ < 0) diminue I et accélère le vélo ; l'inverse le ralentit.
+    const rd0 = p.v < 0 ? -1 : 1, th = slope(p.x), cth = Math.cos(th), kap = dynCurv(p.x, rd0);
+    const dk = (dynCurv(p.x + 12, rd0) - dynCurv(p.x - 12, rd0)) / 24 * cth;   // κ' = dκ/ds
+    const Mt = M_BIKE + M_RIDER;
+    // pesanteur apparente : du corps (avec le bras de levier 1 − κh) et du vélo (pour la force du sol)
+    const gBody = G * cth + kap * (1 - kap * p.h) * p.v * p.v, gBike = G * cth + kap * p.v * p.v;
+    // ↓ maintenu (sans ↑ ni saut) : le pilote absorbe le terrain, le vélo reste au sol sur les bosses et les bords
+    // de table (seule la lèvre d'une bosse d'appel le lance encore) : aide de jeu, plus généreuse que la réalité
+    const absorb = grip && keys.ArrowDown && !pushOn() && !p.pop;
+    legs(dt, absorb ? Math.max(0, gBody) : gBody, true, absorb ? Math.max(0, gBike) : gBike);
+    if (absorb) p.unload = false;
+    const lev = 1 - kap * p.h, I = M_BIKE + M_RIDER * lev * lev;
     // pédaler fait avancer dans le sens où regarde le vélo ; freiner = la flèche opposée
     const gas = gasOn(), brake = brakeOn();
-    if (gas) a += p.dir * PEDAL_ACC * Math.max(0, 1 - Math.max(0, p.v * p.dir) / V_PEDAL_MAX);
-    const fr = ROLL + DRAG_REAL * dragFactor * (down ? 0.6 : 1) * p.v * p.v + (brake ? BRAKE_ACC : 0);
+    const drive = gas ? p.dir * PEDAL_ACC * Math.max(0, 1 - Math.max(0, p.v * p.dir) / V_PEDAL_MAX) : 0;
+    const acc = (Mt * drive - G * Math.sin(th) * (M_BIKE + M_RIDER * lev)
+      + 2 * M_RIDER * lev * kap * p.u * p.v + M_RIDER * lev * dk * p.h * p.v * p.v) / I;
+    const fr = (ROLL + dragK * p.v * p.v + (brake ? BRAKE_ACC : 0)) * Mt / I;
     // la vitesse peut devenir négative (le vélo recule) si la pente l'impose ; les frottements et le frein
     // ramènent la vitesse vers zéro sans jamais l'inverser
-    p.v += a * dt;
+    p.v += acc * dt;
     p.v = Math.abs(p.v) <= fr * dt ? 0 : p.v - Math.sign(p.v) * fr * dt;
     // en montée (dans le sens où regarde le vélo) et en pédalant, le vélo avance toujours un peu
     if (p.dir * th > 0 && gas) p.v = p.dir * Math.max(p.v * p.dir, V_CREEP);
-    if (brake && Math.abs(p.v) > 60 && Math.random() < 0.5) dust(p.x - 20 * Math.sign(p.v), p.y, -p.v * 0.3, rnd(10, 60));
+    if (brake && Math.abs(p.v) > 60 && Math.random() < 0.5) dust(p.x - HALF_WB * Math.sign(p.v), p.y, -p.v * 0.3, rnd(10, 60));
     // butée à gauche de la rampe de départ
     if (p.x < LEFT_STOP && p.v < 0) { p.v = 0; p.x = LEFT_STOP; }
 
@@ -838,17 +1108,22 @@ function step(dt) {
     const by = p.y + vy * dt - 0.5 * G * dt * dt;
     const rd = p.v < 0 ? -1 : 1;   // sens de roulage
     const kick = Math.abs(p.v) > 60 ? lipCrossed(p.x, nx, rd) : null;
-    if (kick && !wantJump) {
-      // passage de la lèvre d'une bosse d'appel : envol dans l'axe de sa pente finale, dans le sens de roulage
-      startAir(); p.vx = p.v * Math.cos(kick.ang); p.vy = Math.abs(p.v) * Math.sin(kick.ang);
-      p.x = kick.x; p.y = ground(kick.x) + 0.5; p.ang = rd * kick.ang;
-    } else if (wantJump) {
-      const jv = lerp(JUMP_V_MIN, JUMP_V_MAX, jumpCharge());
-      downHold = 0;
-      startAir(); p.vx = vx - Math.sin(th) * jv * 0.3; p.vy = vy + jv;
+    // au décollage, vitesse du centre de gravité le long du sol : ṡ·(M_BIKE + M_RIDER·(1 − κh)) / M
+    const ct = (M_BIKE + M_RIDER * lev) / Mt;
+    if (kick) {
+      // passage de la lèvre d'une bosse d'appel : envol dans l'axe de sa pente finale, dans le sens de roulage,
+      // plus l'élan du corps si les jambes se tendent encore à cet instant
+      const tg = rd * kick.ang;
+      startAir(ct * p.v * Math.cos(kick.ang), ct * Math.abs(p.v) * Math.sin(kick.ang), -Math.sin(tg), Math.cos(tg));
+      p.x = kick.x; p.y = ground(kick.x) + 0.5; p.ang = tg;
+    } else if (M_RATIO * p.lock > POP_LAUNCH) {
+      // jambes arrivées en butée sur une détente rapide : le corps arrache le vélo du sol (bunny hop)
+      startAir(ct * vx, ct * vy, -Math.sin(th), Math.cos(th));
       p.x = nx; p.y = gy + 1;
-    } else if (by > gy + 0.8 && Math.abs(p.v) > 60) {
-      startAir(); p.vx = vx; p.vy = vy - G * dt; p.x = nx; p.y = by;
+    } else if (!absorb && ((p.unload && by > gy) || by > gy + 0.8) && Math.abs(p.v) > 60) {
+      // force du sol négative (sommet trop bombé pour la vitesse, sans que les jambes poussent le vélo vers le sol) :
+      // la contrainte se relâche, décollage, si le sol devant descend vraiment plus vite que la trajectoire libre
+      startAir(ct * vx, ct * vy - G * dt, -Math.sin(th), Math.cos(th)); p.x = nx; p.y = by;
     } else {
       p.x = nx; p.y = gy;
     }
@@ -857,14 +1132,26 @@ function step(dt) {
     if (gas) p.crank += Math.abs(p.v) * dt / 14 + dt * 4;
   } else {
     p.airTime += dt;
-    p.vy -= G * dt;
+    const dh = legs(dt, 0, false);
+    // pesanteur et traînée de l'air (½·ρ·SCx·v²), plus faible compressé ; (vx, vy) : vitesse du centre de gravité
+    const sp = Math.hypot(p.vx, p.vy);
+    p.vx -= dragK * sp * p.vx * dt;
+    p.vy -= (G + dragK * sp * p.vy) * dt;
     p.x += p.vx * dt; p.y += p.vy * dt;
+    // le centre de gravité suit sa parabole : quand les jambes changent de Δh, le vélo se déplace de −M_RATIO·Δh
+    // le long de leur axe (normale au cadre) et le corps de +(1 − M_RATIO)·Δh ; se compresser remonte le vélo
+    // (≈ 34 cm sur toute la course), se tendre le descend vers le sol avant la réception
+    p.x += M_RATIO * dh * Math.sin(p.ang); p.y -= M_RATIO * dh * Math.cos(p.ang);
     if (p.x < LEFT_STOP && p.vx < 0) { p.x = LEFT_STOP; p.vx = 0; }
+    // rotation : le moment cinétique I·ω se conserve quand la posture change (compressé : I plus petit,
+    // on tourne plus vite) ; le même effort de rotation donne aussi plus d'accélération et de vitesse max
+    const I = inertia();
+    p.av *= p.I / I; p.I = I;
     // en l'air : → (ou R2) pivote dans le sens horaire, ← (ou L2) dans le sens anti-horaire, à l'écran
     const spin = (keys.ArrowLeft || keys.PadBrake ? 1 : 0) - (keys.ArrowRight || keys.PadGas ? 1 : 0);
-    p.av += spin * AIR_SPIN_ACC * dt;
+    p.av += spin * AIR_SPIN_ACC / I * dt;
     p.av *= Math.exp(-(spin ? 0.5 : 2.5) * dt);
-    p.av = Math.max(-AIR_SPIN_MAX, Math.min(AIR_SPIN_MAX, p.av));
+    p.av = Math.max(-AIR_SPIN_MAX / I, Math.min(AIR_SPIN_MAX / I, p.av));
     p.ang += p.av * dt; p.rot += p.av * dt;
     p.wheel += p.vx * dt / WHEEL_R * 0.6;
 
@@ -885,7 +1172,7 @@ function step(dt) {
     }
     // mains / pieds lâchés tant que M / P est enfoncée
     p.hands = held('m') ? handsMode : 0;
-    p.feet = held('p') ? feetMode : 0;
+    p.feet = held('f') ? feetMode : 0;
     // superman (sans les pieds) tant que S est enfoncée ; on se rétablit au relâchement
     p.sup = held('s') ? Math.min(1, p.sup + dt / 0.25) : Math.max(0, p.sup - dt / 0.2);
     if (p.sup > 0.8) p.tr.superman = true;
@@ -896,16 +1183,18 @@ function step(dt) {
       let th = slope(p.x);
       // roue avant déjà passée au-delà du sommet de la réception (dans le sens de roulage) : on juge l'angle
       // par rapport à la pente qui suit le sommet, et si l'angle est bon le vélo continue sur la réception
-      const sg = p.vx < 0 ? -1 : 1, half = 20 * Math.cos(p.ang);
+      const sg = p.vx < 0 ? -1 : 1, half = HALF_WB * Math.cos(p.ang);
       const crest = crestBetween(p.x - sg * half, p.x + sg * half);
       if (crest !== null) {
         th = Math.atan((ground(crest + sg * 40) - ground(crest)) / (sg * 40));
-        p.x = sg > 0 ? Math.max(p.x, crest + 20 * Math.cos(th)) : Math.min(p.x, crest - 20 * Math.cos(th));
+        p.x = sg > 0 ? Math.max(p.x, crest + HALF_WB * Math.cos(th)) : Math.min(p.x, crest - HALF_WB * Math.cos(th));
       }
       // seule compte l'inclinaison du vélo par rapport au sol ; seuil interpolé entre
       // « jamais atteignable » (sévérité 0) et la tolérance d'origine (sévérité 1)
       const tilt = Math.abs(normAng(p.ang - th));
-      const tiltMax = lerp(Math.PI, down ? 0.75 : 0.55, severity);
+      // jambes encore tendues : elles peuvent absorber le choc sur toute leur course, d'où plus de tolérance
+      const absorb = lerp(0.55, 0.75, p.h / LEG_STROKE);
+      const tiltMax = lerp(Math.PI, absorb, severity);
       // figure pas terminée, tolérance réglée par la sévérité : écart d'orientation (rotation D/G, tailwhip)
       // de 20° à 1 jusqu'à 180° (jamais) à 0 ; membres lâchés : 0 toléré à 1, jusqu'à 4 à 0
       const trickTol = lerp(Math.PI, 0.35, severity);
@@ -919,7 +1208,7 @@ function step(dt) {
       p.y = ground(p.x); p.air = false;
       p.ang = normAng(p.ang); p.av = 0;
       // qualité de réception : 1 = vélo parallèle au sol, 0 = à la limite de tolérance d'origine
-      const q = Math.max(0, 1 - tilt / (down ? 0.75 : 0.55));
+      const q = Math.max(0, 1 - tilt / absorb);
       // bonus de vitesse si parallèle : seulement sur un vrai saut, et plein seulement sur une pente descendante
       const airF = Math.min(1, Math.max(0, (p.airTime - 0.15) / 0.45));
       const slopeF = Math.min(1, Math.max(0.25, -Math.sin(th) * (p.vx < 0 ? -1 : 1) / 0.25));
@@ -927,6 +1216,11 @@ function step(dt) {
       // seule la composante de la vitesse le long du sol est conservée (la composante perpendiculaire est
       // absorbée par le choc) ; elle peut être négative (le vélo repart en arrière), plus le bonus de réception parallèle
       p.v = (p.vx * Math.cos(th) + p.vy * Math.sin(th)) * (1 + gain);
+      // vitesse du centre de gravité → vitesse du vélo le long du sol (voir le lagrangien dans step)
+      const levL = 1 - dynCurv(p.x, p.v < 0 ? -1 : 1) * p.h;
+      p.v *= (M_BIKE + M_RIDER) / (M_BIKE + M_RIDER * levL);
+      // la composante perpendiculaire est encaissée par les jambes : le corps continue de descendre vers le vélo
+      p.u = Math.min(0, -p.vx * Math.sin(th) + p.vy * Math.cos(th)); p.pop = 0;
       if (p.airTime > 0.35) {
         for (let i = 0; i < 10; i++) dust(p.x, p.y, rnd(-80, 80) + p.v * 0.2, rnd(20, 120));
         const T = 2 * Math.PI;
@@ -970,6 +1264,10 @@ function step(dt) {
 }
 
 function update(dt) {
+  // ↑ en mode « sauter » : l'appui (clavier, croix de la manette ou bouton tactile) déclenche le saut comme Espace
+  const up = !!keys.ArrowUp;
+  if (upJump && up && !prevUp) wantJump = true;
+  prevUp = up;
   const n = 4;
   for (let i = 0; i < n; i++) step(dt / n);
   wantJump = false;
@@ -981,7 +1279,7 @@ function update(dt) {
   particles = particles.filter(q => q.t > 0);
   if (msgT > 0) msgT -= dt;
   const m = Math.floor((p.maxX - p.x0) / PX_PER_M);
-  if (m > best) { best = m; try { localStorage.setItem('bmx-best', best); } catch (e) {} }
+  if (m > best) { best = m; try { localStorage.setItem(bestKey(), best); } catch (e) {} }
   // le pilote est placé au tiers gauche de l'écran en roulant vers la droite, au tiers droit vers la gauche
   camLead += ((p.dir > 0 ? 0.3 : controlMode === 'touch' ? 0.55 : 0.7) - camLead) * Math.min(1, dt * 2);
   camX += (p.x - W * camLead - camX) * Math.min(1, dt * 6);
@@ -1040,11 +1338,13 @@ function drawRider() {
   const head = [13, -30], bar = [11, -38];
   // x-up / barspin : la fourche, la roue avant et le guidon tournent autour de la colonne de direction
   const cf = Math.cos(p.bar + p.spin);
-  const front = [head[0] + (20 - head[0]) * cf, -WHEEL_R];
+  const front = [head[0] + (HALF_WB - head[0]) * cf, -WHEEL_R];
   // tailwhip : tout ce qui est derrière la colonne de direction tourne autour d'elle
   const cw = Math.cos(p.whip);
   const whipX = pt => [head[0] + (pt[0] - head[0]) * cw, pt[1]];
-  const rear = whipX([-20, -WHEEL_R]), bb = whipX([-3, -10]), seat = whipX([-3 - 11 * Math.tan(10 * Math.PI / 180), -21]);   // tube de selle à 10° de la verticale ; cadre « sloping » : tube supérieur incliné vers le bas vers l'arrière
+  // boîtier de pédalier à hauteur des axes ; tube de selle à 10° de la verticale ; cadre « sloping » : tube supérieur
+  // incliné vers le bas vers l'arrière
+  const rear = whipX([-HALF_WB, -WHEEL_R]), bb = whipX([-3, -WHEEL_R]), seat = whipX([-3 - 11 * Math.tan(10 * Math.PI / 180), -WHEEL_R - 11]);
 
   // vélo
   ctx.strokeStyle = '#2b2b2b'; ctx.lineWidth = 2;
@@ -1067,9 +1367,10 @@ function drawRider() {
   // superman : le corps s'allonge à l'horizontale derrière le guidon
   const s = p.sup;
   const S = (pt, q) => [pt[0] + (q[0] - pt[0]) * s, pt[1] + (q[1] - pt[1]) * s];
-  const hip = S([L(-5, -9), L(-49, -38)], [-22, -47]);
-  const sh = S([L(5, 7), L(-68, -53)], [-4, -49]);
-  const hd = S([L(11, 15), L(-77, -61)], [6, -56]);
+  // en se compressant, hanches, épaules et tête descendent de toute la course des jambes (LEG_STROKE)
+  const hip = S([L(-5, -9), L(-49, -49 + LEG_STROKE)], [-22, -47]);
+  const sh = S([L(5, 7), L(-68, -68 + LEG_STROKE)], [-4, -49]);
+  const hd = S([L(11, 15), L(-77, -77 + LEG_STROKE)], [6, -56]);
   const legL = 22;
   const kneeF = (k1, k2) => (k1[0] > k2[0] ? k1 : k2);
   const elbF = (k1, k2) => (k1[1] > k2[1] ? k1 : k2);
@@ -1123,10 +1424,30 @@ function draw() {
   ctx.save();
   ctx.translate(ax, ay); ctx.scale(zoom, zoom); ctx.translate(-ax, -ay);
 
+  const x0 = Math.max(0, Math.floor(xLo) - 5);
+  // aide au pompage : bande bleue sous les parties bombées (sommets : se compresser ↓ fait gagner),
+  // orange sous les parties creuses (creux : pousser ↑ fait gagner) ; rien sur le plat et les pentes droites,
+  // ni sous la trajectoire des sauts (de la lèvre au haut de la réception), qu'on survole
+  if (pumpAid) {
+    ctx.lineWidth = 7; ctx.lineCap = 'butt'; ctx.globalAlpha = 0.45;
+    const zones = flightZones(x0, xHi + 10, p.dir);
+    let cls = 0;
+    for (let x = x0; x < xHi + 10; x += 3) {
+      const k = curvature(x), inAir = zones.some(([a, b]) => x >= a && x <= b);
+      const c = inAir ? 0 : k < -PUMP_AID_K ? -1 : k > PUMP_AID_K ? 1 : 0;
+      if (c !== cls) {
+        if (cls) ctx.stroke();
+        cls = c;
+        if (c) { ctx.strokeStyle = c < 0 ? '#2e86de' : '#e67e22'; ctx.beginPath(); ctx.moveTo(sx(x), sy(ground(x)) + 3); }
+      } else if (c) ctx.lineTo(sx(x), sy(ground(x)) + 3);
+    }
+    if (cls) ctx.stroke();
+    ctx.globalAlpha = 1; ctx.lineCap = 'round';
+  }
+
   // la piste : une simple ligne
   ctx.strokeStyle = '#6b4a2b'; ctx.lineWidth = 3; ctx.lineJoin = 'round';
   ctx.beginPath();
-  const x0 = Math.max(0, Math.floor(xLo) - 5);
   for (let x = x0; x < xHi + 10; x += 3) {
     const X = sx(x), Y = sy(ground(x));
     if (x === x0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
@@ -1460,9 +1781,33 @@ function recordFrame(dt) {
     if (al <= 0) return;
     recording = true; rec = []; recDur = 0;
   }
-  rec.push({ dt, p: { ...p }, camX, camY, msg, msgT, particles: particles.map(q => ({ ...q })) });
+  rec.push({ t: simT, dt, p: { ...p }, camX, camY, msg, msgT, particles: particles.map(q => ({ ...q })) });
   recDur += dt;
   while (recDur > REPLAY_SECONDS && rec.length > 1) recDur -= rec.shift().dt;
+}
+
+// ---------- Reculer le temps (P) ----------
+// l'état du jeu est gardé image par image sur les REWIND_KEEP dernières secondes ; P revient 5 s en arrière,
+// et l'on peut appuyer plusieurs fois. Le replay est raccourci d'autant (ce qui a été annulé n'y figure plus)
+const REWIND_KEEP = 60;
+let hist = [], simT = 0;   // simT : temps de jeu écoulé
+const snapP = () => ({ ...p, tr: { ...p.tr }, entry: { ...p.entry } });
+function recordHistory(dt) {
+  simT += dt;
+  hist.push({ t: simT, p: snapP(), camX, camY, camLead });
+  while (hist.length > 1 && simT - hist[0].t > REWIND_KEEP) hist.shift();
+}
+function rewind(sec) {
+  if (!hist.length || editorOpen || cfg) return;
+  let i = hist.length - 1;
+  while (i > 0 && hist[i].t > simT - sec) i--;
+  const f = hist[i];
+  p = { ...f.p, tr: { ...f.p.tr }, entry: { ...f.p.entry } };
+  ({ camX, camY, camLead } = f);
+  simT = f.t; hist.length = i + 1;
+  rec = rec.filter(r => r.t <= simT); recDur = rec.reduce((s, r) => s + r.dt, 0);
+  particles = []; wantJump = false; downHold = 0; downGrace = 0;
+  msg = '⏪ −' + sec + ' s'; msgT = 1;
 }
 function toggleReplay() {
   if (replay) { replay = null; return; }
@@ -1604,20 +1949,25 @@ const CMD_TABLES = {
     ['Au sol'],
     ['Pédaler', 'flèche du côté où regarde le vélo'],
     ['Freiner', 'l\'autre flèche'],
-    ['Sauter', '↑  (↓ maintenu jusqu\'à 1 s : saut plus haut)'],
-    ['Se baisser (pumper, amortir)', '↓'],
+    ['Position souple, jambes un peu fléchies', 'aucune touche'],
+    ['Se compresser (charge la détente en 1 s)', '↓ maintenu'],
+    ['Pousser le vélo, jambes tendues (sans sauter)', '↑ maintenu'],
+    ['Sauter (plus haut compressé, détente chargée par ↓ jusqu\'à 1 s)', 'Espace'],
+    ['Pomper les bosses : compressé au sommet, pousser dans la descente et le creux', '↓ puis ↑'],
     ['Avancer de 10 m (à l\'arrêt)', 'X'],
     ['En l\'air'],
     ['Pivoter dans le sens horaire / anti-horaire', '→  /  ←'],
+    ['Se compresser : rotation plus rapide, moins de traînée', '↓ maintenu'],
     ['Rotation autour de l\'axe vertical (180° = demi-tour)', 'R (maintenir)'],
     ['X-up', 'X (maintenir)'],
     ['Barspin', 'B'],
     ['Lâcher une main (deux : M+M)', 'M (maintenir)'],
-    ['Lâcher un pied (deux : P+P)', 'P (maintenir)'],
+    ['Lâcher un pied (deux : F+F)', 'F (maintenir)'],
     ['Superman', 'S (maintenir)'],
     ['Tailwhip (double : T+T)', 'T'],
     ['Jeu'],
     ['Nouvelle partie', 'N'],
+    ['Reculer le temps de 5 s (plusieurs appuis possibles)', 'P'],
     ['Éditeur de sauts', 'E'],
     ['Replay de la dernière série', 'L'],
   ]],
@@ -1625,11 +1975,14 @@ const CMD_TABLES = {
     ['Au sol'],
     ['Pédaler (dans le sens du vélo)', 'R2'],
     ['Freiner', 'L2'],
-    ['Sauter', 'Croix  /  ↑ de la croix'],
-    ['Se baisser (pumper, amortir)', '↓ de la croix  /  stick gauche ↓'],
+    ['Position souple, jambes un peu fléchies', 'aucune touche'],
+    ['Se compresser (charge la détente en 1 s)', '↓ de la croix  /  stick gauche ↓ (maintenir)'],
+    ['Pousser le vélo, jambes tendues (sans sauter)', '↑ de la croix (maintenir)'],
+    ['Sauter (plus haut compressé, détente chargée par ↓ jusqu\'à 1 s)', 'Croix'],
     ['Avancer de 10 m (à l\'arrêt)', 'L1'],
     ['En l\'air'],
     ['Pivoter dans le sens horaire / anti-horaire', 'R2  /  L2  (ou → / ←)'],
+    ['Se compresser : rotation plus rapide, moins de traînée', '↓ maintenu'],
     ['Rotation autour de l\'axe vertical', 'R1 (maintenir)'],
     ['X-up', 'L1 (maintenir)'],
     ['Barspin', 'stick droit ↑'],
@@ -1645,10 +1998,13 @@ const CMD_TABLES = {
     ['Au sol'],
     ['Pédaler', 'bouton PÉDALER'],
     ['Freiner', 'bouton FREIN'],
-    ['Sauter', 'bouton SAUT'],
-    ['Se baisser (pumper, amortir)', 'bouton BAS'],
+    ['Position souple, jambes un peu fléchies', 'aucun bouton'],
+    ['Se compresser (charge la détente en 1 s)', 'bouton BAS (maintenir)'],
+    ['Pousser le vélo, jambes tendues (sans sauter)', 'bouton POUSSER (maintenir)'],
+    ['Sauter (plus haut compressé, détente chargée par BAS jusqu\'à 1 s)', 'bouton SAUT'],
     ['En l\'air'],
     ['Pivoter dans le sens horaire / anti-horaire', 'boutons ↻  /  ↺'],
+    ['Se compresser : rotation plus rapide, moins de traînée', 'bouton BAS (maintenir)'],
     ['Rotation autour de l\'axe vertical', 'bouton 360° (maintenir)'],
     ['X-up', 'bouton X-up (maintenir)'],
     ['Barspin', 'bouton Barspin'],
@@ -1657,7 +2013,8 @@ const CMD_TABLES = {
     ['Superman', 'bouton Superman (maintenir)'],
     ['Tailwhip (double : 2 appuis rapides)', 'bouton Tailwhip'],
     ['Jeu'],
-    ['Nouvelle partie, replay', 'menu ☰ Réglages'],
+    ['Nouvelle partie', 'bouton en haut de l\'écran'],
+    ['Replay', 'menu ☰ Réglages'],
   ]],
 };
 function renderCmd() {
@@ -1675,16 +2032,102 @@ function renderCmd() {
     for (const a of PAD_ACTIONS) if (padCustom[a.key]) add('td', [a.label, specName(padCustom[a.key])]);
     return;
   }
-  for (const r of rows) r.length === 1 ? add('th', r, true) : add('td', r);
+  if (trail) add('th', [modeHelp()], true);
+  for (let r of rows) {
+    if (trail && (/^Pédaler/.test(r[0]) || !trailBrakes && /^Freiner/.test(r[0]))) continue;
+    // ↑ en mode « sauter » : la ligne « Pousser » devient un saut, le pompage se fait en relâchant ↓
+    if (upJump && /^Pousser/.test(r[0])) r = ['Sauter (comme Espace)', r[1]];
+    if (upJump && /^Pomper/.test(r[0])) r = ['Pomper les bosses : compressé au sommet, relâcher dans la descente et le creux', '↓ puis relâcher'];
+    r.length === 1 ? add('th', r, true) : add('td', r);
+  }
 }
 function setCmdPanel(open) {
   if (open) renderCmd();
   $('cmdPanel').hidden = !open;
 }
 $('cmdBtn').addEventListener('click', e => { e.currentTarget.blur(); setCmdPanel($('cmdPanel').hidden); });
+// Mode normal → trail → trail avec freins : change de mode et recommence une partie (le record est propre à chaque mode)
+function modeHelp() {
+  return trailBrakes ? 'Mode trail avec freins : pas de pédalage, on roule sur l\'élan et la pente, le frein reste'
+    : 'Mode trail : ni pédalage ni frein, on roule sur l\'élan et la pente';
+}
+function showMode() {
+  $('modeBtn').textContent = 'Mode : ' + MODE_NAMES[mode];
+  if (!$('cmdPanel').hidden) renderCmd();
+}
+$('modeBtn').addEventListener('click', e => {
+  e.currentTarget.blur();
+  mode = MODES[(MODES.indexOf(mode) + 1) % MODES.length]; applyMode();
+  try { localStorage.setItem('bmx-mode', mode); } catch (err) {}
+  try { best = +localStorage.getItem(bestKey()) || 0; } catch (err) { best = 0; }
+  for (const k in keys) keys[k] = false;
+  reset(); showMode(); syncTouchUI(true);
+  msg = { normal: 'Mode normal', trail: 'Mode trail : ni pédalage ni frein', 'trail-freins': 'Mode trail avec freins : pas de pédalage' }[mode]; msgT = 2;
+});
+showMode();
+// Nouvelle partie dans le mode courant (comme N)
+$('restartBtn').addEventListener('click', e => {
+  e.currentTarget.blur();
+  for (const k in keys) keys[k] = false;
+  reset(); syncTouchUI(true);
+});
+// Maintien au sol avec ↓ : activé / désactivé (mémorisé, sans recommencer la partie)
+function showGrip() { $('gripBtn').textContent = '↓ colle : ' + (grip ? 'oui' : 'non'); }
+$('gripBtn').addEventListener('click', e => {
+  e.currentTarget.blur();
+  grip = !grip;
+  try { localStorage.setItem('bmx-grip', grip ? 'on' : 'off'); } catch (err) {}
+  showGrip();
+  msg = grip ? '↓ maintient le vélo au sol' : '↓ ne maintient plus le vélo au sol'; msgT = 2;
+});
+showGrip();
+// Rôle de ↑ : tendre les jambes doucement ou sauter (mémorisé, sans recommencer la partie)
+function showUp() {
+  $('upBtn').textContent = '↑ : ' + (upJump ? 'sauter' : 'tendre');
+  $('tbJump').textContent = upJump ? '↑ SAUT' : 'POUSSER';
+  if (!$('cmdPanel').hidden) renderCmd();
+}
+$('upBtn').addEventListener('click', e => {
+  e.currentTarget.blur();
+  upJump = !upJump; prevUp = !!keys.ArrowUp;
+  try { localStorage.setItem('bmx-up', upJump ? 'jump' : 'push'); } catch (err) {}
+  showUp();
+  msg = upJump ? '↑ fait sauter' : '↑ tend les jambes doucement'; msgT = 2;
+});
+showUp();
+// Profil des bosses d'appel : parabole → arc de cercle (hauteur, angle) → arc de cercle (charge ≤ 2,5 g) ;
+// s'applique aux sauts pas encore affichés (comme les curseurs de hauteur, longueur et angle)
+const KICK_NAMES = { parabole: 'parabole', cercle: 'cercle (H, α)', g: 'cercle ≤ ' + String(KICK_G_MAX).replace('.', ',') + ' g' };
+function showKick() { $('kickBtn').textContent = 'Appel : ' + KICK_NAMES[kickMode]; }
+$('kickBtn').addEventListener('click', e => {
+  e.currentTarget.blur();
+  kickMode = KICK_MODES[(KICK_MODES.indexOf(kickMode) + 1) % KICK_MODES.length];
+  try { localStorage.setItem('bmx-kick', kickMode); } catch (err) {}
+  showKick(); regenAhead();
+  msg = { parabole: 'Bosses d\'appel en parabole (rayon serré au pied)',
+          cercle: 'Bosses d\'appel en arc de cercle selon la hauteur et l\'angle',
+          g: 'Bosses d\'appel en arc de cercle : au plus 2,5 g à 35 km/h' }[kickMode]; msgT = 2.5;
+});
+showKick();
+const LAND_NAMES = { 1: 'angle de la lèvre', 1.4: 'rayon × 1,4', 2: 'rayon × 2', 4: 'rayon × 4',
+                     '4H': 'longueur 4 H', var: 'courbure variable' };
+function showLand() { $('landBtn').textContent = 'Réception : ' + LAND_NAMES[landMode]; }
+$('landBtn').addEventListener('click', e => {
+  e.currentTarget.blur();
+  landMode = LAND_MODES[(LAND_MODES.indexOf(landMode) + 1) % LAND_MODES.length];
+  try { localStorage.setItem('bmx-land', landMode); } catch (err) {}
+  showLand(); regenAhead();
+  msg = { 1: 'Réception en arc de cercle à l\'angle de la lèvre (le plus grand rayon sans écart d\'angle)',
+          1.4: 'Réception en arc de rayon × 1,4 : plus douce, plus plate en haut',
+          2: 'Réception en arc de rayon × 2 : plus douce, nettement plus plate en haut',
+          4: 'Réception en arc de rayon × 4 : très longue et très douce, mais plate en haut',
+          '4H': 'Réception en arc de cercle de longueur 4 × hauteur',
+          var: 'Réception à courbure variable : angle de la lèvre en haut, de plus en plus douce jusqu\'au sol' }[landMode];
+  msgT = 2.5;
+});
+showLand();
 $('cmdClose').addEventListener('click', e => { e.currentTarget.blur(); setCmdPanel(false); });
 addEventListener('keydown', e => { if (e.key === 'Escape' && !$('cmdPanel').hidden) setCmdPanel(false); });
-$('bNew').addEventListener('click', e => { e.currentTarget.blur(); reset(); closePanel(); });
 $('bReplay').addEventListener('click', e => { e.currentTarget.blur(); toggleReplay(); closePanel(); });
 $('bFull').addEventListener('click', e => {
   e.currentTarget.blur();
@@ -1706,9 +2149,10 @@ function updatePadDiag() {
   if (controlMode !== 'pad') return;
   const api = typeof navigator.getGamepads === 'function';
   const pads = getPads();
+  const how = g => { const e = padEntriesFor(g, pads); return e === null ? 'ignorée : à configurer' : e === PAD_MAP ? 'disposition par défaut' : 'disposition personnalisée'; };
   const txt = 'Diagnostic — API manette : ' + (api ? 'oui' : 'non')
     + ' · page sécurisée : ' + (window.isSecureContext === false ? 'non' : 'oui')
-    + ' · manettes vues : ' + (pads.length ? pads.map(g => g.id + ' [' + (g.mapping || 'non standard') + ']').join(', ') : 'aucune')
+    + ' · manettes vues : ' + (pads.length ? pads.map(g => g.id + ' [' + (g.mapping || 'non standard') + '] (' + how(g) + ')').join(', ') : 'aucune')
     + ' · dernière touche reçue : ' + lastKeyDiag;
   if (txt !== padDiagText) { padDiagText = txt; $('padDiag').textContent = txt; }
 }
@@ -1717,20 +2161,21 @@ function updatePadDiag() {
 let uiState = '', padState = '';
 function syncTouchUI(force) {
   const showTouch = controlMode === 'touch' && !replay && !editorOpen && !cfg;
-  const st = [showTouch, !!replay, p.air].join();
+  const st = [showTouch, !!replay, p.air, mode].join();
   if (force || st !== uiState) {
     uiState = st;
     touchLayer.hidden = !showTouch;
     if (!showTouch) { touchPtrs.clear(); for (const b of touchBtns) b.release(); }
     replayBar.hidden = !replay || !IS_TOUCH;
     touchLayer.classList.toggle('air', !!p.air);
+    touchLayer.classList.toggle('nogas', trail);
+    touchLayer.classList.toggle('nobrake', trail && !trailBrakes);
     // en l'air, les deux gros boutons font pivoter le vélo
     $('tbGas').textContent = p.air ? '↻' : 'PÉDALER';
     $('tbBrake').textContent = p.air ? '↺' : 'FREIN';
   }
   updatePadDiag();
-  const pad0 = getPads()[0];
-  const nonStd = !!pad0 && pad0.mapping !== 'standard' && !padCustom;
+  const nonStd = padConnected && getPads().some(g => g.mapping !== 'standard' && padEntriesFor(g, getPads()) !== customEntries);
   const ps = (padConnected ? 'ok' : 'no') + (padCustom ? 'c' : '') + (nonStd ? 'n' : '');
   if (ps !== padState) {
     padState = ps;
@@ -1746,7 +2191,7 @@ function syncTouchUI(force) {
 // Pour chaque action, le joueur appuie sur le bouton (ou pousse la gâchette / le stick) de son choix.
 // Fonctionne avec n'importe quelle disposition de boutons, y compris les manettes non standard sous Android TV.
 const cfgEl = $('padCfg'), cfgAction = $('cfgAction'), cfgTip = $('cfgTip'), cfgMsg = $('cfgMsg'), cfgProg = $('cfgProg');
-let cfg = null;   // { i, specs, base, pending }
+let cfg = null;   // { i, specs, id, base, pending } ; id : manette choisie (la première qui envoie une entrée), base : axes au repos par manette
 const specName = s => s.t === 'b' ? 'bouton ' + s.i : 'axe ' + s.i + (s.s > 0 ? ' +' : ' −');
 const sameSpec = (a, b) => a.t === b.t && a.i === b.i && (a.t === 'b' || a.s === b.s);
 function renderCfg() {
@@ -1756,14 +2201,15 @@ function renderCfg() {
   cfgProg.style.width = (cfg.i / PAD_ACTIONS.length * 100) + '%';
 }
 function startPadConfig() {
-  const g = getPads()[0];
-  cfg = { i: 0, specs: {}, base: g ? Array.from(g.axes) : [], pending: null };
+  const pads = getPads();
+  cfg = { i: 0, specs: {}, id: null, base: {}, pending: null };
+  for (const g of pads) cfg.base[g.id] = Array.from(g.axes);
   releaseAll();
-  cfgEl.hidden = false; cfgMsg.textContent = g ? '' : 'Aucune manette détectée : appuie sur un bouton de la manette.';
+  cfgEl.hidden = false; cfgMsg.textContent = pads.length ? '' : 'Aucune manette détectée : appuie sur un bouton de la manette.';
   renderCfg();
 }
 function endPadConfig(save) {
-  if (save && Object.keys(cfg.specs).length) { setPadCustom(cfg.specs); }
+  if (save && Object.keys(cfg.specs).length) { setPadCustom(cfg.specs, cfg.id); }
   cfg = null; cfgEl.hidden = true;
   if (save) { msg = 'Manette configurée ✓'; msgT = 2; }
 }
@@ -1772,27 +2218,31 @@ function cfgNext() {
   if (cfg.i >= PAD_ACTIONS.length) endPadConfig(true); else renderCfg();
 }
 // entrée actuellement active : un bouton enfoncé, sinon un axe qui a bougé par rapport à sa valeur de départ
-function activeInput(g) {
+function activeInput(g, base) {
   for (let i = 0; i < g.buttons.length; i++) if (g.buttons[i] && g.buttons[i].pressed) return { spec: { t: 'b', i }, peak: 0 };
   for (let i = 0; i < g.axes.length; i++) {
-    const d = g.axes[i] - (cfg.base[i] || 0);
-    if (Math.abs(d) > 0.7) return { spec: { t: 'a', i, s: Math.sign(d), base: cfg.base[i] || 0 }, peak: g.axes[i] };
+    const d = g.axes[i] - (base[i] || 0);
+    if (Math.abs(d) > 0.7) return { spec: { t: 'a', i, s: Math.sign(d), base: base[i] || 0 }, peak: g.axes[i] };
   }
   return null;
 }
+// Toutes les manettes sont écoutées jusqu'à la première entrée ; la configuration se poursuit ensuite sur
+// cette manette seulement (une autre manette branchée ne vient pas s'y mêler)
 function stepConfig() {
-  const g = getPads()[0];
-  padConnected = !!g;
-  if (!g) { cfgMsg.textContent = 'Aucune manette détectée : appuie sur un bouton de la manette.'; return; }
-  if (!cfg.base.length) cfg.base = Array.from(g.axes);
+  const pads = getPads();
+  padConnected = pads.length > 0;
+  if (!pads.length) { cfgMsg.textContent = 'Aucune manette détectée : appuie sur un bouton de la manette.'; return; }
+  for (const q of pads) if (!cfg.base[q.id]) cfg.base[q.id] = Array.from(q.axes);
   if (cfg.pending) {
     // on attend que le joueur relâche ; pour un axe, la valeur de repos devient la référence
-    const sp = cfg.pending.spec;
+    const g = pads.find(q => q.id === cfg.id);
+    if (!g) return;
+    const base = cfg.base[g.id], sp = cfg.pending.spec;
     const released = sp.t === 'b' ? !(g.buttons[sp.i] && g.buttons[sp.i].pressed) : Math.abs(g.axes[sp.i] - cfg.pending.peak) > 0.6;
     if (released) {
       // la valeur de repos d'une gâchette change après son premier appui (0 puis −1 sur certaines manettes) :
       // on la remet à jour pour qu'elle ne soit pas prise pour un appui à l'étape suivante
-      if (sp.t === 'a') cfg.base[sp.i] = g.axes[sp.i];
+      if (sp.t === 'a') base[sp.i] = g.axes[sp.i];
       if (cfg.pending.ignore) { cfg.pending = null; return; }   // entrée déjà prise : on attend une autre
       if (sp.t === 'a') sp.base = g.axes[sp.i];
       cfg.specs[PAD_ACTIONS[cfg.i].key] = sp;
@@ -1800,7 +2250,11 @@ function stepConfig() {
     }
     return;
   }
-  const act = activeInput(g);
+  let act = null;
+  for (const q of cfg.id ? pads.filter(q => q.id === cfg.id) : pads) {
+    act = activeInput(q, cfg.base[q.id]);
+    if (act) { cfg.id = q.id; break; }
+  }
   if (!act) return;
   const dup = Object.entries(cfg.specs).find(([, s]) => sameSpec(s, act.spec));
   if (dup) {
@@ -1828,7 +2282,7 @@ function loop(t) {
   if (cfg) stepConfig();   // jeu en pause pendant la configuration de la manette
   else if (replay) { pollGamepad(); stepReplay(dt); }
   // jeu en pause pendant l'édition et le replay
-  else if (!editorOpen) { pollGamepad(); update(dt); recordFrame(dt); }
+  else if (!editorOpen) { pollGamepad(); update(dt); recordHistory(dt); recordFrame(dt); }
   syncTouchUI();
   if (replay) drawReplay(); else draw();
   requestAnimationFrame(loop);
