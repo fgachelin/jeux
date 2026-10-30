@@ -251,6 +251,9 @@
   <div class="row">Angle de sortie du saut : <b id="aRangeVal"></b></div>
   <div class="dual" id="aRange"><div class="track"></div><div class="fill"></div>
     <input type="range" min="10" max="80" step="1"><input type="range" min="10" max="80" step="1"></div>
+
+  <label><div class="row">Hauteur de la réception : <b id="landHVal">100 %</b></div>
+  <input id="landHRange" type="range" min="0.5" max="2" step="0.05" value="1"></label>
   <div class="hint"><span>s'applique à la piste hors écran</span></div>
   <button id="edOpen" class="btn" style="margin-top:10px;width:100%">Éditeur de sauts (E)</button>
 </div>
@@ -419,6 +422,18 @@ const angleRange = dualSlider('aRange', 'bmx-angle', [40, 50], () => regenAhead(
 const jumpHeight = () => rnd(...heightRange()) * PX_PER_M;
 const jumpLength = () => rnd(...lengthRange()) * PX_PER_M;
 const jumpAngle = () => rnd(...angleRange()) * Math.PI / 180;
+// Hauteur de la réception : échelle verticale de la butte de réception (et de la table), longueur et profil inchangés
+let landScale = 1;
+const landHRange = document.getElementById('landHRange'), landHVal = document.getElementById('landHVal');
+try { const s = +localStorage.getItem('bmx-landh'); if (s >= 0.5 && s <= 2) landScale = s; } catch (e) {}
+const showLandH = () => { landHRange.value = landScale; landHVal.textContent = Math.round(landScale * 100) + ' %'; };
+showLandH();
+landHRange.addEventListener('input', () => { landScale = +landHRange.value; showLandH(); });
+landHRange.addEventListener('change', () => {
+  landHRange.blur();
+  try { localStorage.setItem('bmx-landh', landScale); } catch (e) {}
+  regenAhead();
+});
 
 // ---------- Terrain (une simple ligne) ----------
 let heights = [];
@@ -470,10 +485,12 @@ function landingProfile(H, ang) {
   return arcProfile(rho, rho * Math.sin(Math.acos(1 - H / rho)));
 }
 const arcProfile = (rho, L) => ({ L, f: x => rho - Math.sqrt(Math.max(0, rho * rho - (L - x) * (L - x))) });
-function addLanding(H, ang) { const p = landingProfile(H, ang); addSeg(p.L, t => p.f(t * p.L)); }
+// La réception et la face montante sont ensuite étirées verticalement par landScale (curseur « Hauteur de la
+// réception ») : même longueur, même profil, pentes multipliées d'autant
+function addLanding(H, ang) { const p = landingProfile(H, ang); addSeg(p.L, t => landScale * p.f(t * p.L)); }
 // face montante d'une butte de réception, de hauteur H sur la longueur L : arc de cercle creux depuis le sol
 // (ρ = (H² + L²) / 2H, L ≥ H)
-function addFace(H, L) { const p = arcProfile((H * H + L * L) / (2 * H), L); addSeg(L, t => p.f((1 - t) * L)); }
+function addFace(H, L) { const p = arcProfile((H * H + L * L) / (2 * H), L); addSeg(L, t => landScale * p.f((1 - t) * L)); }
 // Bosse d'appel de hauteur Hk dont la pente finale fait l'angle ang avec l'horizontale
 function addKicker(Hk, ang) {
   if (kickMode === 'parabole') {
@@ -544,10 +561,11 @@ function addProcShape(kind, sc) {
     const n = 2 + Math.floor(Math.random() * 3), L = rnd(6, 9) * PX_PER_M * sc, A = rnd(18, 32) * sc;
     for (let k = 0; k < n; k++) addSeg(L, t => A * (1 - Math.cos(2 * Math.PI * t)) / 2);
   } else if (kind === 'table') {
-    // tabletop : la longueur du saut est celle de la table
+    // tabletop : la longueur du saut est celle de la table ; la table va en ligne droite de la hauteur de la lèvre
+    // à celle de la réception (pas de marche quand le curseur « Hauteur de la réception » n'est pas à 100 %)
     const Hk = jumpHeight() * sc;
     const ang = addKicker(Hk, jumpAngle());
-    addSeg(jumpLength() * sc, () => Hk);
+    addSeg(jumpLength() * sc, t => Hk * (1 + (landScale - 1) * t));
     addLanding(Hk, ang);
   } else {
     // double : kicker, trou, réception ; la longueur va du sommet du kicker au sommet de la réception
@@ -823,18 +841,19 @@ cv.addEventListener('pointerdown', e => {
 });
 
 // ---------- Rampe de départ ----------
-// Plateforme puis descente en cosinus (pente max ~32°) ; sa hauteur est calculée pour arriver en bas
-// à RAMP_TARGET_V en roue libre (sans pédaler ni pumper), avec les frottements réglés au moment du départ
+// Descente en quart de sinusoïde, sans plateforme : la plus raide (~32°) dès le départ, de plus en plus douce
+// jusqu'en bas ; sa hauteur est calculée pour arriver en bas à RAMP_TARGET_V en roue libre (sans pédaler ni
+// pumper), avec les frottements réglés au moment du départ
 const RAMP_TARGET_V = 40 / 3.6 * PX_PER_M;   // 40 km/h
-const RAMP_PLATFORM = 150, RAMP_RUNOUT = 400, START_X = 100;
+const RAMP_RUNOUT = 400, START_X = 45;       // départ juste à droite de la butée LEFT_STOP (vélo entier sur la pente)
 let rampEndX = 0, rampReported = false;
 const rampShape = (H, x) => {
   const L = 2.5 * H;
-  return x < RAMP_PLATFORM ? H : x < RAMP_PLATFORM + L ? H * (1 + Math.cos(Math.PI * (x - RAMP_PLATFORM) / L)) / 2 : 0;
+  return x < L ? H * (1 - Math.sin(Math.PI / 2 * Math.max(0, x) / L)) : 0;
 };
 // Vitesse en bas d'une rampe de hauteur H, avec la même physique que le jeu (pas de 1/240 s)
 function rampEndSpeed(H) {
-  const end = RAMP_PLATFORM + 2.5 * H, dt = 1 / 240;
+  const end = 2.5 * H, dt = 1 / 240;
   let x = START_X, v = 0;
   for (let n = 0; x < end && n < 240 * 60; n++) {
     const th = Math.atan((rampShape(H, x + 3) - rampShape(H, x - 3)) / 6 - TRAIL_SLOPE);
@@ -850,7 +869,7 @@ function addStartRamp() {
   for (let i = 0; i < 30; i++) { const m = (lo + hi) / 2; if (rampEndSpeed(m) < RAMP_TARGET_V) lo = m; else hi = m; }
   const H = hi;
   segStarts.push(0); segBase.push(0);
-  rampEndX = RAMP_PLATFORM + 2.5 * H;
+  rampEndX = 2.5 * H;
   for (let x = 0; x < rampEndX; x++) heights.push(rampShape(H, x));
   addSeg(RAMP_RUNOUT, () => 0);
   rampReported = false;
@@ -865,8 +884,7 @@ function reset() {
   // h : extension des jambes (0 compressé → LEG_STROKE tendu), u : vitesse du corps par rapport au vélo,
   // pop : force de la détente rapide en cours (× poids, 0 = aucune), lock : vitesse du corps quand les jambes arrivent
   // en butée, I : moment d'inertie de rotation relatif (1 = debout)
-  // mode trail : sans pédalage, on part déjà sur la pente de la rampe (la plateforme est plate)
-  const x0 = trail ? RAMP_PLATFORM + 20 : 100;
+  const x0 = START_X;
   p = { x: x0, y: 0, v: 0, vx: 0, vy: 0, air: false, ang: 0, crouch: 0,
         h: LEG_STROKE, u: 0, uG: 0, pop: 0, lock: 0, I: 1,
         crank: 0, wheel: 0, crashed: 0, maxX: x0, x0, airTime: 0,
@@ -877,7 +895,7 @@ function reset() {
   camX = 0; camY = p.y; camLead = 0.3;
 }
 let camX = 0, camY = 0, camLead = 0.3;
-const LEFT_STOP = 20;   // butée à gauche de la plateforme de départ
+const LEFT_STOP = 20;   // butée à gauche, en haut de la rampe de départ
 let downHold = 0, downGrace = 0;
 const jumpCharge = () => Math.min(1, downHold / JUMP_CHARGE_TIME);
 
@@ -1411,7 +1429,9 @@ function draw() {
   ctx.save();
   ctx.translate(ax, ay); ctx.scale(zoom, zoom); ctx.translate(-ax, -ay);
 
-  const x0 = Math.max(0, Math.floor(xLo) - 5);
+  // points de tracé calés sur une grille fixe du monde (tous les 3 px) : s'ils suivaient la caméra, la ligne
+  // couperait les arêtes (sommet d'une réception, lèvre) différemment à chaque image, et elles vibreraient
+  const x0 = Math.max(0, Math.floor(xLo / 3) * 3 - 6);
   // aide au pompage : bande bleue sous les parties bombées (sommets : se compresser ↓ fait gagner),
   // orange sous les parties creuses (creux : pousser ↑ fait gagner) ; rien sur le plat et les pentes droites,
   // ni sous la trajectoire des sauts (de la lèvre au haut de la réception), qu'on survole
@@ -1444,8 +1464,8 @@ function draw() {
   // repères de distance
   ctx.fillStyle = '#b8a48c'; ctx.font = '12px system-ui'; ctx.textAlign = 'center';
   const step = 50 * PX_PER_M;
-  for (let x = Math.ceil(xLo / step) * step; x < xHi; x += step) {
-    const m = Math.round((x - 100) / PX_PER_M);
+  for (let x = START_X + Math.ceil((xLo - START_X) / step) * step; x < xHi; x += step) {
+    const m = Math.round((x - START_X) / PX_PER_M);
     if (m <= 0) continue;
     const Y = sy(ground(x));
     ctx.fillRect(sx(x) - 1, Y, 2, 10);
