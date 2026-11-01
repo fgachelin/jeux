@@ -152,6 +152,8 @@
 <body>
 <canvas id="c"></canvas>
 <div id="topBtns">
+  <button id="levelBtn" class="btn" title="Niveau : difficulté de l'enchaînement">débutant</button>
+  <button id="terrainBtn" class="btn" title="Terrain entre les sauts">mixte</button>
   <button id="kickBtn" class="btn" title="Profil des bosses d'appel">parabole</button>
   <button id="landBtn" class="btn" title="Profil des réceptions">angle de la lèvre</button>
   <button id="restartBtn" class="btn">Nouvelle partie</button>
@@ -239,6 +241,9 @@
 
   <label class="row" style="display:block"><input id="pumpAid" type="checkbox" style="width:auto;margin:0 4px 0 0">Aide au pompage</label>
   <div class="hint"><span>piste bleue : ↓ fait gagner · orange : ↑</span></div>
+
+  <label class="row" style="display:block"><input id="jumpPred" type="checkbox" style="width:auto;margin:0 4px 0 0">Prédiction des sauts</label>
+  <div class="hint"><span>vitesse mini – maxi en roue libre, sans saut (↓ + ↑) ni pompage</span></div>
 
   <div class="row">Hauteur des sauts : <b id="hRangeVal"></b></div>
   <div class="dual" id="hRange"><div class="track"></div><div class="fill"></div>
@@ -337,14 +342,14 @@ const LEG_AIR_ACC = 12 * G;          // en l'air, accélération du corps par ra
 const LEG_U_END = 0.3 * PX_PER_M;    // ↑ maintenu au sol : vitesse max du corps en arrivant jambes tendues (vélo non arraché)
 const LEG_HOLD_MAX = 3.5;            // force max des jambes pour tenir la posture (× poids du pilote)
 const LEG_PULL_MAX = 1.5;            // force max pour tirer le vélo vers soi (bras et jambes) en se compressant (× poids)
-// saut (Espace) : détente explosive jusqu'à la butée des jambes, qui dépasse la charge subie (pesanteur apparente)
-// de 1,3 fois le poids sans détente chargée à 2,5 fois avec ↓ maintenu 1 s, dans la limite de POP_FORCE_MAX = 3,5 fois
+// saut (↓ + ↑) : détente explosive jusqu'à la butée des jambes, qui dépasse la charge subie (pesanteur apparente)
+// de 1,3 fois le poids sans détente disponible à 2,5 fois avec ↓ maintenu 1 s, dans la limite de POP_FORCE_MAX = 3,5 fois
 // le poids (force d'un saut vertical : 2,5 à 3,5 fois le poids). Le saut part de la position du moment : bien
 // compressé, il dispose de toute la course des jambes ; depuis la position souple, il reste un petit saut.
 // Sur le plat, compressé : bunny hop de ~0,45 à ~0,7 m (bon pilote : 0,5 à 0,8 m).
 // ↑ maintenu (pousser) va jusqu'à POP_FORCE_MAX aussi, mais en freinant avant la butée : les roues restent au sol
 const POP_NET_MIN = 1.3, POP_NET_MAX = 2.5, POP_FORCE_MAX = 3.5, JUMP_CHARGE_TIME = 1;
-const JUMP_GRACE = 0.3;              // délai pendant lequel la détente reste chargée après avoir lâché ↓
+const JUMP_GRACE = 0.3;              // délai pendant lequel la détente reste disponible après avoir lâché ↓
 const POP_LAUNCH = 0.4 * PX_PER_M;   // vitesse min donnée au vélo par des jambes arrivant en butée pour qu'il décolle
 const LANDING_BONUS = 0.15;          // gain de vitesse max pour une réception parfaitement parallèle au sol
 const DRAG_TUCK = 0.7;               // traînée (SCx) compressé / debout : ~0,35 m² au lieu de 0,5
@@ -390,9 +395,19 @@ pumpAidBox.addEventListener('change', () => {
   pumpAid = pumpAidBox.checked; pumpAidBox.blur();
   try { localStorage.setItem('bmx-pumpaid', pumpAid ? '1' : '0'); } catch (e) {}
 });
+// Prédiction des sauts : vitesse mini au pied de chaque bosse d'appel, et verdict pour le prochain saut
+let predOn = true;
+const predBox = document.getElementById('jumpPred');
+try { const s = localStorage.getItem('bmx-pred'); if (s !== null) predOn = s === '1'; } catch (e) {}
+predBox.checked = predOn;
+predBox.addEventListener('change', () => {
+  predOn = predBox.checked; predBox.blur();
+  try { localStorage.setItem('bmx-pred', predOn ? '1' : '0'); } catch (e) {}
+});
 const lerp = (a, b, t) => a + (b - a) * t;
 
-// Curseurs doubles hauteur / longueur / angle des sauts ; renvoie une fonction qui lit [min, max]
+// Curseurs doubles hauteur / longueur / angle des sauts ; renvoie une fonction qui lit [min, max], avec .set(min, max)
+// (sans regénérer la piste). onDone : après un réglage à la main
 function dualSlider(id, key, def, onDone, unit = ' m', decimals = 1) {
   const box = document.getElementById(id);
   const [lo, hi] = box.querySelectorAll('input');
@@ -414,11 +429,18 @@ function dualSlider(id, key, def, onDone, unit = ' m', decimals = 1) {
     onDone();
   });
   show();
-  return () => [+lo.value, +hi.value];
+  const get = () => [+lo.value, +hi.value];
+  get.set = (a, b) => {
+    lo.value = a; hi.value = b; show();
+    try { localStorage.setItem(key, JSON.stringify([a, b])); } catch (e) {}
+  };
+  return get;
 }
-const heightRange = dualSlider('hRange', 'bmx-height', [0.9, 1.5], () => regenAhead());
-const lengthRange = dualSlider('lRange', 'bmx-length', [3, 7], () => regenAhead());
-const angleRange = dualSlider('aRange', 'bmx-angle', [40, 50], () => regenAhead(), '°', 0);
+// un réglage des sauts s'applique à la piste pas encore affichée
+const manualJumps = () => regenAhead();
+const heightRange = dualSlider('hRange', 'bmx-height', [0.9, 1.5], manualJumps);
+const lengthRange = dualSlider('lRange', 'bmx-length', [3, 7], manualJumps);
+const angleRange = dualSlider('aRange', 'bmx-angle', [40, 50], manualJumps, '°', 0);
 const jumpHeight = () => rnd(...heightRange()) * PX_PER_M;
 const jumpLength = () => rnd(...lengthRange()) * PX_PER_M;
 const jumpAngle = () => rnd(...angleRange()) * Math.PI / 180;
@@ -432,7 +454,42 @@ landHRange.addEventListener('input', () => { landScale = +landHRange.value; show
 landHRange.addEventListener('change', () => {
   landHRange.blur();
   try { localStorage.setItem('bmx-landh', landScale); } catch (e) {}
-  regenAhead();
+  manualJumps();
+});
+
+// Niveau (bouton en haut) : ne touche pas aux dimensions des sauts (curseurs), seulement à la difficulté de
+// l'enchaînement, par l'habileté du pilote de référence qui vérifie la piste (voir rideRef) :
+// - pump : son pompage (seuil de courbure thr, anticipation lead en s, préparation des jambes avant chaque courbe
+//   prep) ; réglages choisis sur des bosses de 4 à 8 m : gain moyen ~ +7 km/h en amateur, +14 en pro, +17 en goat ;
+// - kick : sa technique d'appel pour gagner de la vitesse horizontale (jambes tendues en bas de la bosse d'appel,
+//   bras et jambes pliés en haut, ce qui revient à un appel moins incliné ; voir chooseKick) : 'fixe' (pliage à 1 m
+//   de la lèvre si le saut passe encore) ou 'opt' (point de pliage optimisé saut par saut) ;
+// en goat, les sauts sont choisis de préférence pour ne passer qu'en pompant et avec cette technique, et il y a des
+// enchaînements à scruber (voir addCombo)
+const LEVELS = {
+  debutant: { name: 'débutant', msg: 'roule sans pomper', pump: null, kick: null },
+  amateur:  { name: 'amateur',  msg: 'pompe les courbes marquées',
+              pump: { thr: 3 * PUMP_AID_K, lead: 0.05, prep: false }, kick: null },
+  pro:      { name: 'pro',      msg: 'pompe finement et plie en haut d\'appel',
+              pump: { thr: PUMP_AID_K, lead: 0, prep: false }, kick: 'fixe' },
+  goat:     { name: 'goat',     msg: 'pompe et plie au plus juste : sans ça, ça ne passe pas',
+              pump: { thr: 0.5 * PUMP_AID_K, lead: 0.05, prep: true }, kick: 'opt' },
+};
+const LEVEL_ORDER = ['debutant', 'amateur', 'pro', 'goat'];
+let level = 'debutant';
+try { const s = localStorage.getItem('bmx-level'); if (s in LEVELS) level = s; } catch (e) {}
+function setLevel(lv) {
+  level = lv;
+  document.getElementById('levelBtn').textContent = LEVELS[lv].name;
+  try { localStorage.setItem('bmx-level', lv); } catch (e) {}
+}
+function applyLevel(lv) { setLevel(lv); regenAhead(); }
+setLevel(level);
+document.getElementById('levelBtn').addEventListener('click', e => {
+  e.currentTarget.blur();
+  const lv = LEVEL_ORDER[(LEVEL_ORDER.indexOf(level) + 1) % LEVEL_ORDER.length];
+  applyLevel(lv);
+  msg = 'Niveau ' + LEVELS[lv].name + ' : le pilote de référence ' + LEVELS[lv].msg; msgT = 2.5;
 });
 
 // ---------- Terrain (une simple ligne) ----------
@@ -549,35 +606,145 @@ function saveLibrary() { try { localStorage.setItem('bmx-library', JSON.stringif
 
 // Les bosses d'appel des sauts d'origine sont déjà enregistrées pour rouler vers la droite (addKicker) ;
 // on repère ensuite les lèvres du même profil pour rouler vers la gauche
-function addProc(kind, sc) {
+// top : sommet de la réception de chaque lèvre (pour la prédiction des sauts) ; en roulant vers la gauche, la
+// réception est la bosse d'appel, dont le sommet est la lèvre de l'autre sens
+// dims : { H, L, a } hauteur, longueur (px) et angle de sortie (rad) du saut, tirés dans les curseurs par défaut
+const randomDims = () => ({ H: jumpHeight(), L: jumpLength(), a: jumpAngle() });
+function addProc(kind, sc, dims = randomDims()) {
   const start = heights.length;
-  addProcShape(kind, sc);
+  const kick = addProcShape(kind, sc, dims);
   if (kind !== 'rollers') scanLips(start, [-1]);
+  if (kick) for (const k of lips) if (k.dir < 0 && k.x > kick.x + PX_PER_M) k.top = kick.x;
 }
-function addProcShape(kind, sc) {
+function addProcShape(kind, sc, dims) {
   if (kind === 'rollers') {
-    // whoops de 6 à 9 m : assez longues pour être pompées à la vitesse de croisière (30 à 40 km/h) ;
-    // plus courtes, le vélo décolle à chaque sommet et retombe sur la face montante de la suivante
-    const n = 2 + Math.floor(Math.random() * 3), L = rnd(6, 9) * PX_PER_M * sc, A = rnd(18, 32) * sc;
+    // whoops parcourues en 0,6 à 0,8 s à la vitesse du pilote de référence (35 km/h sans lui), entre 3 et 9 m :
+    // assez longues pour être pompées ; plus courtes, le vélo décolle à chaque sommet et retombe sur la face
+    // montante de la suivante ; plus longues (en trail, sans pédaler, on roule moins vite), on les traverse comme
+    // un plat interminable. Hauteur au plus 12 % de la longueur
+    // (2 à 4 bosses, moins si la place manque : dims.maxLen, voir flatBudget)
+    const v = refState ? Math.abs(refState.v) : 35 / 3.6 * PX_PER_M;
+    const L = Math.min(9 * PX_PER_M, Math.max(3 * PX_PER_M, v * rnd(0.6, 0.8))) * sc, maxLen = dims.maxLen ?? Infinity;
+    if (L > maxLen) { addSeg(maxLen, t => Math.min(rnd(18, 32) * sc, 0.12 * maxLen) * (1 - Math.cos(2 * Math.PI * t)) / 2); return; }
+    const n = Math.max(1, Math.min(2 + Math.floor(Math.random() * 3), Math.floor((dims.maxLen ?? Infinity) / L)));
+    const A = Math.min(rnd(18, 32) * sc, 0.12 * L);
     for (let k = 0; k < n; k++) addSeg(L, t => A * (1 - Math.cos(2 * Math.PI * t)) / 2);
   } else if (kind === 'table') {
     // tabletop : la longueur du saut est celle de la table ; la table va en ligne droite de la hauteur de la lèvre
     // à celle de la réception (pas de marche quand le curseur « Hauteur de la réception » n'est pas à 100 %)
-    const Hk = jumpHeight() * sc;
-    const ang = addKicker(Hk, jumpAngle());
-    addSeg(jumpLength() * sc, t => Hk * (1 + (landScale - 1) * t));
+    const Hk = dims.H * sc;
+    const ang = addKicker(Hk, dims.a), kick = lips[lips.length - 1];
+    addSeg(dims.L * sc, t => Hk * (1 + (landScale - 1) * t));
+    kick.top = heights.length;
     addLanding(Hk, ang);
+    kick.landEnd = heights.length;
+    kick.dims = { H: Hk, L: dims.L * sc, a: dims.a };   // dimensions demandées (px, rad)
+    return kick;
   } else {
     // double : kicker, trou, réception ; la longueur va du sommet du kicker au sommet de la réception
-    const Hk = jumpHeight() * sc;
+    const Hk = dims.H * sc;
     const back = Math.max(30, 0.9 * Hk), face = Math.max(35, Hk);
-    const gap = Math.max(0, jumpLength() * sc - back - face);
-    const ang = addKicker(Hk, jumpAngle());
+    const gap = Math.max(0, dims.L * sc - back - face);
+    const ang = addKicker(Hk, dims.a), kick = lips[lips.length - 1];
     addSeg(back, t => Hk * (1 - smooth(t)));
     addSeg(gap, () => 0);
     addFace(0.9 * Hk, face);
+    kick.top = heights.length;
     addLanding(0.9 * Hk, ang);
+    kick.landEnd = heights.length;
+    kick.dims = { H: Hk, L: dims.L * sc, a: dims.a };   // dimensions demandées (px, rad)
+    return kick;
   }
+}
+
+// ---------- Enchaînement « scrub » (niveau goat) ----------
+// Petite bosse d'appel arrondie (arc de cercle, peu inclinée), table et réception, puis tout de suite une grande
+// bosse d'appel (curseurs) et sa table. Dimensions calculées par la vraie physique, pour un pilote qui arrive à
+// la vitesse V sans pédaler :
+// - zone où enfoncer ↓ avant la petite lèvre : une fenêtre de SCRUB_WINDOW secondes (0 : un seul moment), celle
+//   dont la plus mauvaise sortie est la plus rasante (comprimer trop tôt, les jambes sont en butée à la lèvre :
+//   rien ne change) ;
+// - table du petit saut : 80 % de la plus longue que passent toutes les sorties scrubées de la fenêtre ; sans scrub,
+//   on part plus haut et plus loin, on survole la réception et on retombe sur la face de la grande bosse d'appel ;
+// - table du grand saut : aux 70 % entre la plus longue qu'on passe sans scrub et la plus longue qu'on passe en
+//   appuyant n'importe où dans la fenêtre (au moins 1 m d'écart, sinon l'enchaînement est abandonné).
+const COMBO_SHARE = 0.4;
+const SCRUB_WINDOW = 0;   // goat : pas de tolérance, ↓ au meilleur moment (0,06 s de fenêtre les rendait très rares)
+// Prolonge provisoirement la piste à plat (le temps des simulations : ground ne doit pas générer la suite au milieu
+// de l'enchaînement), puis la remet comme avant
+// (et rien n'est généré pendant ce temps : ce serait ajouté après le plat provisoire, qu'on retire ensuite)
+function withPad(fn) {
+  const last = heights[heights.length - 1], g = generating;
+  for (let i = 0; i < 5000; i++) heights.push(last);
+  generating = true;
+  try { return fn(); } finally { heights.length -= 5000; generating = g; }
+}
+// Plus longue table (en px, de 0 à maxL) qu'on passe depuis l'état de décollage s : build(L) ajoute table et
+// réception et renvoie le sommet de la réception ; le terrain est remis comme avant à chaque essai
+function longestTable(s, build, maxL) {
+  const m = heights.length, saved = baseH;
+  const ok = L => { const top = build(L), r = withPad(() => clearsJump(s, top, 1)); heights.length = m; baseH = saved; return r; };
+  if (!s || !ok(0)) return -1;
+  let lo = 0, hi = maxL;
+  if (ok(hi)) return hi;
+  for (let i = 0; i < 14; i++) { const mid = (lo + hi) / 2; if (ok(mid)) lo = mid; else hi = mid; }
+  return lo;
+}
+// V : vitesse du pilote de référence au pied de la petite bosse (50 à 60 km/h au hasard sans lui) ; renvoie false
+// (piste remise comme avant) si l'enchaînement est abandonné
+function addCombo(sc) {
+  const start = heights.length, base0 = baseH, nLips = lips.length;
+  const abandon = () => { heights.length = start; baseH = base0; lips.length = nLips; return false; };
+  // petite bosse d'appel : hauteur et angle dans le bas des intervalles des curseurs
+  const H1 = towardMin(heightRange, 0.7) * PX_PER_M * sc, km = kickMode;
+  kickMode = 'cercle';
+  const a1 = towardMin(angleRange, 0.7) * Math.PI / 180, ang1 = addKicker(H1, a1);
+  kickMode = km;
+  const k1 = lips[lips.length - 1];
+  const V = refState ? withPad(() => simSpeedAt(refState, kickerFoot(k1))) : rnd(50, 60) / 3.6 * PX_PER_M;
+  if (V < 30 / 3.6 * PX_PER_M) return abandon();
+  const q = withPad(() => restState(kickerFoot(k1), V, 1));
+  // fenêtre d'appui sur ↓ : au moins SCRUB_WINDOW secondes de large (un joueur n'appuie pas au pas de temps près),
+  // celle dont la plus mauvaise sortie est la plus rasante ; D : distance avant la lèvre où l'on enfonce ↓
+  const dD = 0.1 * PX_PER_M, Ds = [], s1s = [];
+  withPad(() => {
+    for (let D = dD; D <= 4 * PX_PER_M; D += dD) { Ds.push(D); s1s.push(simTakeoff(q, k1.x, scrubAt(k1, D))); }
+  });
+  const nW = Math.max(1, Math.round(SCRUB_WINDOW * V / dD) + 1), steep = s => s ? s.vy / s.vx : Infinity;
+  let w0 = -1, best = Infinity;
+  for (let i = 0; i + nW <= Ds.length; i++) {
+    const worst = Math.max(...s1s.slice(i, i + nW).map(steep));
+    if (worst < best) { best = worst; w0 = i; }
+  }
+  if (w0 < 0 || best === Infinity) return abandon();
+  const win = [Ds[w0], Ds[w0 + nW - 1]], inWin = s1s.slice(w0, w0 + nW);
+  // échantillons de la fenêtre pour le grand saut : bords, milieu et quarts
+  const samples = [0, 0.25, 0.5, 0.75, 1].map(f => win[0] + f * (win[1] - win[0]));
+  const table1 = L => { addSeg(L, t => H1 * (1 + (landScale - 1) * t)); const top = heights.length; addLanding(H1, ang1); return top; };
+  // longueurs dans l'intervalle du curseur
+  const [Lmin, Lmax] = lengthRange().map(v => v * PX_PER_M);
+  const T1 = Math.min(...inWin.map(s => longestTable(s, table1, 15 * PX_PER_M)));
+  if (T1 < Lmin) return abandon();
+  const L1 = Math.min(Lmax, Math.max(Lmin, 0.8 * T1));
+  k1.top = table1(L1);
+  k1.landEnd = heights.length;
+  k1.dims = { H: H1, L: L1, a: a1 };
+  // grande bosse d'appel, juste au bas de la réception
+  const H2 = jumpHeight() * sc, a2 = jumpAngle(), ang2 = addKicker(H2, a2), k2 = lips[lips.length - 1];
+  const [sSs, sN] = withPad(() => [samples.map(D => simTakeoff(q, k2.x, scrubAt(k1, D))), simTakeoff(q, k2.x)]);
+  const table2 = L => { addSeg(L, t => H2 * (1 + (landScale - 1) * t)); const top = heights.length; addLanding(H2, ang2); return top; };
+  const LS = Math.min(...sSs.map(s => longestTable(s, table2, 40 * PX_PER_M))), LN = longestTable(sN, table2, 40 * PX_PER_M);
+  if (LS < 1 * PX_PER_M || LS - Math.max(0, LN) < 1 * PX_PER_M) return abandon();
+  // aux 70 % entre LN et LS, ramené dans l'intervalle du curseur (en gardant au moins 0,3 m de plus que LN)
+  const lo = Math.max(Lmin, Math.max(0, LN) + 0.3 * PX_PER_M), hi = Math.min(Lmax, LS);
+  if (lo > hi) return abandon();
+  const L2 = Math.min(hi, Math.max(lo, Math.max(0, LN) + 0.7 * (LS - Math.max(0, LN))));
+  k2.top = table2(L2);
+  k2.dims = { H: H2, L: L2, a: a2 };
+  k2.landEnd = heights.length;
+  k1.combo = { big: k2, dist: (win[0] + win[1]) / 2, win, V };
+  scanLips(start, [-1]);
+  return true;
 }
 
 // Profil tracé : interpolé au pixel, puis on repère les lèvres d'envol dans les deux sens de roulage
@@ -605,21 +772,290 @@ function addDrawn(pts, sc, smoothIt) {
   scanLips(start, [1, -1]);
 }
 
-function addEntry(e) {
-  if (e.type === 'drawn') addDrawn(e.pts, e.scale, !e.ctrl);
-  else addProc(e.kind, e.scale);
+// sc : échelle (celle du motif par défaut) ; dims : dimensions d'un saut d'origine (tirées dans les curseurs par défaut)
+function addEntry(e, sc = e.scale, dims = randomDims()) {
+  if (e.type === 'drawn') addDrawn(e.pts, sc, !e.ctrl);
+  else addProc(e.kind, sc, dims);
 }
 
-function genFeature() {
-  segStarts.push(heights.length); segBase.push(baseH);
-  if (heights.length < 600 || Math.random() < 0.2 || !library.length) {
-    let d = rnd(-25, 25);
-    if (baseH + d > 80 || baseH + d < -80) d = -d;
-    addSeg(rnd(200, 380), t => d * smooth(t));
-    baseH += d;
-  } else {
-    addEntry(library[Math.floor(Math.random() * library.length)]);
+// ---------- Pilote de référence ----------
+// La piste ne propose jamais un obstacle qu'on sait impossible : elle est générée en faisant rouler un pilote de
+// référence avec la vraie physique, élément par élément. Il roule sans touche, sauf le pédalage en mode normal (pas
+// en trail) et ↓ au repère des enchaînements ; il se pose vélo parallèle au sol. Un élément n'est gardé que s'il
+// le passe (réception au-delà du sommet de chaque saut, sans s'arrêter) même avec 5 % de vitesse en moins.
+// Les dimensions s'adaptent donc à tout ce qui compte : curseurs, profils, frottement de l'air, niveau et mode.
+const REF_MARGIN = 0.95;
+let refState = null;   // état du pilote de référence à la fin de la piste générée (null : pas de vérification)
+let segRef = [];       // le même au début de chaque élément de piste (pour regenAhead)
+// Fait rouler le pilote de référence depuis l'état q (vitesse × vScale) jusqu'au sol après endX ; null s'il se pose
+// avant le sommet d'une réception ou s'arrête. Sinon renvoie son dernier état au sol au moins REF_LOOK avant endX :
+// jusque-là, le jeu n'a regardé (pente, courbure, contact des roues) que le terrain déjà définitif, pas le plat
+// provisoire qui suit endX ; et un vol qui passe endX se posera sur l'élément suivant (la face d'une bosse d'appel,
+// par exemple) : c'est en ajoutant celui-ci qu'on le vérifiera. Les vérifications successives reproduisent ainsi
+// exactement une descente d'une traite
+const REF_LOOK = 1.5 * PX_PER_M;
+let refNoScrub = false;   // pilote de référence qui n'appuie pas sur ↓ (un enchaînement doit alors échouer)
+let refFailX = 0;         // où le dernier rideRef a échoué (réception avant le sommet : abscisse du décollage)
+// Pompage du pilote de référence (habileté sk du niveau ; null : aucun) : 1 (↑ : se tendre dans un creux), -1 (↓ : se
+// compresser sur une bosse) ou 0, d'après la courbure que voit la dynamique (dynCurv) lead secondes devant lui ; avec
+// prep, entre deux courbes, il prépare ses jambes pour la suivante (compressé avant un creux, tendu avant une bosse),
+// jusqu'à 0,6 s à l'avance. Il n'enfonce jamais ↓ et ↑ ensemble (ce serait un saut)
+let refNoPump = false;   // pilote de référence qui ne pompe pas (en goat, un saut doit alors échouer, si possible)
+let refPlainUntil = -Infinity;   // avant cette abscisse, il ne pompe pas et ne plie pas en haut d'appel
+// Il ne regarde pas au-delà de la prochaine lèvre et ne pompe plus dans les 0,2 dernières secondes avant elle (se
+// compresser à la lèvre scruberait le saut, se tendre le ferait partir plus haut)
+function refPump(sk) {
+  if (!sk || refNoPump || p.air || p.x < refPlainUntil) return 0;
+  const d = p.v < 0 ? -1 : 1, v = Math.max(1, Math.abs(p.v));
+  let lipT = Infinity;
+  for (let i = lips.length - 1; i >= 0 && lips[i].x > p.x - 3000; i--) {
+    const k = lips[i], t = d * (k.x - p.x) / v;
+    if (k.dir === d && t > 0 && t < lipT) lipT = t;
   }
+  if (lipT < 0.2) return 0;
+  const at = t => t < lipT ? dynCurv(p.x + d * v * t, d) : 0;
+  const k = at(sk.lead);
+  if (k > sk.thr) return 1;
+  if (k < -sk.thr) return -1;
+  if (sk.prep) for (let t = sk.lead + 0.1; t <= Math.min(0.6, lipT); t += 0.1) {
+    const kk = at(t);
+    if (kk > sk.thr) return -1;
+    if (kk < -sk.thr) return 1;
+  }
+  return 0;
+}
+function rideRef(q, endX, vScale = 1) {
+  const copy = s => ({ ...s, tr: { ...s.tr }, entry: { ...s.entry } });
+  const sk = LEVELS[level].pump, useKick = !!LEVELS[level].kick && !refNoPump;
+  // le pompage regarde aussi devant lui (jusqu'à look secondes) : le point de reprise doit être pris avant
+  const look = sk && !refNoPump ? (sk.prep ? 0.6 : Math.max(sk.lead, 0.2)) + 0.05 : 0;
+  return withPad(() => sandbox({ ...q, v: q.v * vScale }, () => {
+    // top : sommet de la réception du saut en cours ; hold : ↓ maintenu jusqu'à la réception (scrub d'un enchaînement,
+    // ou pliage en haut d'appel), décidé au sol ; tech : technique d'appel (1 : jambes tendues en bas, -1 : plié)
+    let top = null, hold = false, tech = 0;
+    let cp = copy(p);                // dernier état au sol avant endX − REF_LOOK
+    for (let n = 0; n < 240 * 60; n++) {
+      if (!p.air && p.x < endX - REF_LOOK - look * Math.abs(p.v)) cp = copy(p);
+      keys.PadGas = !trail;
+      if (!p.air) {
+        hold = false; tech = 0;
+        for (let i = lips.length - 1; i >= 0 && lips[i].x > p.x - 3000; i--) {
+          const k = lips[i];
+          if (k.combo && !refNoScrub && p.x >= k.x - k.combo.dist && p.x < k.x) hold = true;
+          if (useKick && k.scrubD != null && p.x >= k.footX && p.x < k.x && p.x >= refPlainUntil)
+            tech = p.x < k.x - k.scrubD ? 1 : -1;
+        }
+        if (tech < 0) hold = true;
+      }
+      const pump = hold || tech ? 0 : refPump(sk);
+      keys.ArrowDown = hold || pump < 0;
+      keys.ArrowUp = !hold && (tech > 0 || pump > 0);
+      if (p.air) { p.ang = slope(p.x); p.av = 0; }
+      const was = p.air;
+      step(1 / 240);
+      if (!was && p.air) {
+        const k = lips.find(l => l.dir > 0 && Math.abs(l.x - p.x) < PX_PER_M);
+        top = k ? landingTop(k) : null;
+        refFailX = p.x;
+      }
+      if (was && !p.air) {
+        if (top !== null && p.x + HALF_WB < top) return null;
+        top = null;
+      }
+      if (!p.air && p.x >= endX) return cp;
+      if (!p.air && n > 240 && p.v <= 0) { refFailX = p.x; return null; }
+    }
+    return null;
+  }));
+}
+// Ajoute l'élément build() s'il est faisable pour le pilote de référence (qui avance alors jusqu'au bout) ; sinon
+// remet la piste comme avant et renvoie false. build() peut lui-même renvoyer false (élément abandonné)
+// needSkill : l'élément doit en plus échouer sans pompage ni technique d'appel (goat) ; prevState : état du pilote
+// avant le saut précédent, qu'on refait sans plier en haut d'appel ni pomper la réception : l'élément doit alors
+// échouer (il n'est franchissable que si le saut précédent a été bien fait)
+function tryFeature(build, needSkill = false, prevState = null) {
+  const m = heights.length, b0 = baseH, nl = lips.length;
+  const undo = () => { heights.length = m; baseH = b0; lips.length = nl; return false; };
+  if (build() === false) return undo();
+  if (!refState) return true;
+  const end = heights.length;
+  // d'abord les tests les moins chers qui peuvent éliminer l'élément : sans pompage ni technique, il doit échouer ;
+  // saut précédent mal fait, il doit échouer même sans la technique d'appel du nouveau saut (pas encore choisie :
+  // s'il passe ainsi, il passerait aussi avec)
+  if (needSkill) {
+    refNoPump = true;
+    const without = rideRef(refState, end);
+    refNoPump = false;
+    if (without) return undo();
+  }
+  const plainPasses = () => {
+    refPlainUntil = m;
+    const r = rideRef(prevState, end);
+    refPlainUntil = -Infinity;
+    return !!r;
+  };
+  if (prevState && plainPasses()) return undo();
+  chooseKick(nl, end);
+  // marge de vitesse : l'état de départ est souvent juste avant la lèvre de l'élément précédent ; un échec sur
+  // celui-ci (déjà vérifié depuis son propre début) n'est pas la faute du nouvel élément
+  if (!rideRef(refState, end, REF_MARGIN) && refFailX >= m) return undo();
+  const s = rideRef(refState, end);
+  if (!s) return undo();
+  if (prevState && plainPasses()) return undo();
+  refState = s;
+  return true;
+}
+// Technique d'appel des nouvelles lèvres (à partir de l'indice nl de lips) jusqu'à end, selon le niveau : jambes
+// tendues depuis 1 m avant le pied de la bosse d'appel (footX), pliées à scrubD avant la lèvre jusqu'à la réception.
+// 'fixe' : scrubD = 1 m si le pilote de référence passe encore ainsi ; 'opt' : 0,4, 0,8, 1,2 ou 1,8 m, celui
+// qui lui laisse le plus de vitesse au bout de l'élément ; sans technique (null) si c'est mieux ou si rien ne passe
+// Les essais partent d'un état du pilote pris juste avant la bosse d'appel (plus court que depuis refState)
+function chooseKick(nl, end) {
+  const kick = LEVELS[level].kick;
+  if (!kick || !refState) return;
+  for (const k of lips.slice(nl)) {
+    if (k.dir < 0 || k.combo || landingTop(k) === null) continue;
+    k.footX = withPad(() => kickerFoot(k));
+    k.scrubD = null;
+    const q = rideRef(refState, k.footX) || refState;
+    const cands = [null, ...(kick === 'fixe' ? [1] : [0.4, 0.8, 1.2, 1.8]).map(D => D * PX_PER_M)];
+    let best = null, bestV = -Infinity;
+    for (const D of cands) {
+      k.scrubD = D;
+      const s = rideRef(q, end);
+      if (s && s.v > bestV) { bestV = s.v; best = D; }
+    }
+    k.scrubD = best;
+  }
+}
+// Descente d'élan de hauteur D (px), comme un roll-in : longueur 2,5 × D (4 m au moins), pente moyenne ~22°, au plus
+// ~31° (plus douce et plus longue, elle passait pour du presque plat sans intérêt)
+function addDescent(D) {
+  addSeg(Math.max(4 * PX_PER_M, 2.5 * D), t => -D * smooth(t));
+  baseH -= D;
+}
+// Descente qu'il faudrait avant l'élément build() pour arriver au pied de son premier saut à factor fois la vitesse
+// mini en roue libre (bilan d'énergie, 80 % de rendement), maxD au plus ; 0 si rien à gagner
+function descentFor(build, factor = 1.12, maxD = 8 * PX_PER_M) {
+  const m = heights.length, b0 = baseH, nl = lips.length;
+  build();
+  let D = 0;
+  const k = lips.slice(nl).filter(q => q.dir > 0).sort((a, b) => a.x - b.x)[0];
+  if (k && refState) withPad(() => {
+    const pr = jumpPred(k, true);
+    if (!pr || pr.atFoot === Infinity) return;
+    const v = simSpeedAt(refState, pr.foot), need = factor * pr.atFoot;
+    D = Math.min(maxD, Math.max(0, (need * need - v * v) / (2 * G * 0.8)));
+  });
+  heights.length = m; baseH = b0; lips.length = nl;
+  return D;
+}
+// Dimensions tirées dans les intervalles des curseurs, jamais en dehors : dans leur partie basse quand f va de 0
+// (tout l'intervalle) à 1 (le minimum), dans leur partie haute quand f va de 0 à -1 (le maximum)
+const towardMin = (range, f) => {
+  const [a, b] = range();
+  return f >= 0 ? rnd(a, a + (b - a) * (1 - f)) : rnd(a + (b - a) * -f, b);
+};
+const dimsToward = f => ({ H: towardMin(heightRange, f) * PX_PER_M, L: towardMin(lengthRange, f) * PX_PER_M,
+                           a: towardMin(angleRange, f) * Math.PI / 180 });
+// Saut de la bibliothèque, faisable, aux dimensions toujours dans les intervalles des curseurs, sans descente d'élan
+// devant lui (elle faisait une grande descente et un creux avant chaque saut) : 8 essais, tirés de plus en plus près
+// du bas des intervalles ; en goat, les 4 premiers sont tirés dans le haut des intervalles : si l'élément précédent
+// est un saut (prev = { lip, state }), les 2 premiers ne doivent passer que si ce saut a été bien fait (plié en haut
+// d'appel, réception pompée : il est alors marqué mustFold), les 2 suivants doivent échouer sans pompage ni
+// technique d'appel. Renvoie false si rien ne passe (la vitesse manque : voir genFeature)
+function addJumpFeasible(e, prev = null) {
+  const goat = level === 'goat';
+  for (let n = 0; n < 8; n++) {
+    const needPrev = goat && prev && n < 2, needSkill = goat && n < 4 && !needPrev;
+    const dims = e.type !== 'proc' ? null : goat && n < 4 ? dimsToward(-1 + n / 4) : dimsToward((n - (goat ? 4 : 0)) / 7);
+    if (tryFeature(() => addEntry(e, e.scale, dims && { ...dims }), needSkill, needPrev ? prev.state : null)) {
+      if (needPrev) prev.lip.mustFold = true;
+      return true;
+    }
+  }
+  return false;
+}
+// Enchaînement gardé seulement si le pilote de référence le passe en appuyant sur ↓ dans la zone (tryFeature) et
+// échoue sans appuyer (sinon ce n'est qu'un double saut ordinaire)
+function addComboFeasible() {
+  const m = heights.length, b0 = baseH, nl = lips.length, prev = refState;
+  if (!tryFeature(() => addCombo(1))) return false;
+  if (!prev) return true;
+  refNoScrub = true;
+  const passesWithout = !!rideRef(prev, heights.length);
+  refNoScrub = false;
+  if (!passesWithout) return true;
+  heights.length = m; baseH = b0; lips.length = nl; refState = prev;
+  return false;
+}
+// Simple descente (2 m) : redonne de l'élan quand rien d'autre ne passe ; en terrain plat, un plat dans la limite du
+// presque plat permis, ou s'il n'en reste presque plus, exceptionnellement une petite descente (1,5 m)
+function addSpeedDescent() {
+  const flat = terrain === 'plat' && flatBudget() >= 2.5 * PX_PER_M;
+  const build = flat ? () => addFlat(Math.min(rnd(200, 380), flatBudget()))
+    : () => addDescent((terrain === 'plat' ? 1.5 : 2) * PX_PER_M);
+  if (!tryFeature(build)) { build(); refState = null; }
+}
+function addFlat(len = rnd(200, 380)) {
+  let d = rnd(-25, 25);
+  if (baseH + d > 80 || baseH + d < -80) d = -d;
+  addSeg(len, t => d * smooth(t));
+  baseH += d;
+}
+
+// Presque plat entre deux sauts (plats, bosses, plats de repli ; pas les descentes) : jamais plus de FLAT_MAX_RATIO
+// fois la longueur du dernier saut, du pied de sa bosse d'appel à la fin de sa réception
+// (25 m au plus, même après un saut très long : au-delà, ce n'est plus que du plat sans intérêt)
+const FLAT_MAX_RATIO = 3, FLAT_MAX = 25 * PX_PER_M;
+let flatRun = 0, jumpSpan = 15 * PX_PER_M;   // presque plat depuis le dernier saut ; longueur du dernier saut (px)
+let segFlat = [];                             // [flatRun, jumpSpan] au début de chaque élément (pour regenAhead)
+const flatBudget = () => Math.min(FLAT_MAX_RATIO * jumpSpan, FLAT_MAX) - flatRun;
+// Longueur du saut de la lèvre k jusqu'à end (fin de sa réception), depuis le pied de sa bosse d'appel
+const spanOf = (k, end) => end - (withPad(() => kickerFoot(k)) + PX_PER_M);
+// Après l'ajout d'un élément commencé en start (baseH valait b0) : un saut remet le presque plat à zéro et donne la
+// nouvelle longueur de saut ; une descente nette de plus de 1 m ne compte pas ; le reste s'ajoute au presque plat
+function noteFeature(start, b0) {
+  const end = heights.length;
+  const k = lips.filter(l => l.dir > 0 && l.x >= start && l.x < end).sort((a, b) => a.x - b.x)[0];
+  if (k) { jumpSpan = Math.max(PX_PER_M, spanOf(k, end)); flatRun = 0; }
+  else if (b0 - baseH <= PX_PER_M) flatRun += end - start;
+}
+
+// Terrain (bouton en haut) : 'mixte' : une descente seulement quand un saut l'exige ; 'descente' : en plus, des
+// descentes de 2 à 6 m entre les sauts (un élément sur trois environ) ; 'plat' : jamais de descente ajoutée, ce sont
+// les sauts qui s'adaptent (raccourcis, abaissés). La pente générale de la piste (TRAIL_SLOPE) reste partout
+const TERRAINS = ['mixte', 'descente', 'plat'];
+const DESCENT_SHARE = 0.3;
+let terrain = 'mixte';
+try { const s = localStorage.getItem('bmx-terrain'); if (TERRAINS.includes(s)) terrain = s; } catch (e) {}
+
+// Plat ou bosses seulement s'il reste au moins 5 m de presque plat permis (3 m pour une bosse) ; sinon un saut
+function genFeature() {
+  segStarts.push(heights.length); segBase.push(baseH); segRef.push(refState); segFlat.push([flatRun, jumpSpan]);
+  const start = heights.length, b0 = baseH, budget = flatBudget();
+  const jumps = library.filter(e => !(e.type === 'proc' && e.kind === 'rollers'));
+  if (terrain === 'descente' && heights.length >= 600 && Math.random() < DESCENT_SHARE) {
+    const D = rnd(2, 6) * PX_PER_M;
+    if (!tryFeature(() => addDescent(D))) { addDescent(D); refState = null; }
+  } else if ((heights.length < 600 || Math.random() < 0.2 || !library.length) && (budget >= 5 * PX_PER_M || !jumps.length)) {
+    const len = Math.max(100, Math.min(rnd(200, 380), budget));
+    if (!tryFeature(() => addFlat(len))) addSpeedDescent();
+  } else {
+    let e = library[Math.floor(Math.random() * library.length)];
+    const rollers = q => q.type === 'proc' && q.kind === 'rollers';
+    if (rollers(e) && budget < 3 * PX_PER_M && jumps.length) e = jumps[Math.floor(Math.random() * jumps.length)];
+    if (!(level === 'goat' && Math.random() < COMBO_SHARE && addComboFeasible())) {
+      if (rollers(e)) { if (!tryFeature(() => addEntry(e, e.scale, { maxLen: budget }))) addSpeedDescent(); }
+      else {
+        // saut précédent (élément juste avant celui-ci) : pour les sauts qui ne passent que s'il a été bien fait
+        const i = segStarts.length - 2, a = segStarts[i], b = segStarts[i + 1];
+        const lip = i >= 1 && segRef[i] && lips.find(l => l.dir > 0 && l.dims && l.scrubD != null && l.x >= a && l.x < b);
+        if (!addJumpFeasible(e, lip ? { lip, state: segRef[i] } : null)) addSpeedDescent();
+      }
+    }
+  }
+  noteFeature(start, b0);
 }
 
 // Profil d'un motif seul (pour les aperçus de l'éditeur), en pixels, sans toucher à la piste
@@ -631,10 +1067,17 @@ function sampleProfile(e) {
   [heights, lips, baseH] = saved;
   return out;
 }
+// (pendant une génération ou une simulation, on ne génère jamais la suite, ce qui couperait l'élément en cours ;
+// au-delà de la piste, le sol continue à plat)
+let generating = false;
 function ground(x) {
-  while (heights.length < x + 3000) genFeature();
+  if (!simulating && !generating) {
+    generating = true;
+    try { while (heights.length < x + 3000) genFeature(); } finally { generating = false; }
+  }
   if (x < 0) return heights[0] - TRAIL_SLOPE * x;
   const i = Math.floor(x), f = x - i;
+  if (i + 1 >= heights.length) return heights[heights.length - 1] - TRAIL_SLOPE * x;
   return heights[i] * (1 - f) + heights[i + 1] * f - TRAIL_SLOPE * x;
 }
 // Regénère la piste au-delà de ce qui est visible (après un changement de réglage)
@@ -642,9 +1085,11 @@ function regenAhead() {
   const from = Math.max(camX + W, p.x) + 100;
   const i = segStarts.findIndex(s => s > from);
   if (i < 0) return;
-  heights.length = segStarts[i]; baseH = segBase[i];
-  segStarts.length = i; segBase.length = i;
+  heights.length = segStarts[i]; baseH = segBase[i]; refState = segRef[i]; [flatRun, jumpSpan] = segFlat[i];
+  segStarts.length = i; segBase.length = i; segRef.length = i; segFlat.length = i;
   lips = lips.filter(k => k.x < heights.length);
+  // le saut qui suivait a été refait : le pliage n'est plus obligatoire pour lui
+  for (const k of lips) if (k.x >= (segStarts[i - 1] ?? 0)) k.mustFold = false;
 }
 // Lèvre d'envol franchie entre x0 et x1 en roulant dans le sens d (1 droite, -1 gauche)
 function lipCrossed(x0, x1, d) {
@@ -675,7 +1120,11 @@ function keyDown(key, repeat, time) {
   if (replay) return;   // pendant le replay, les commandes du jeu sont ignorées
   // P : reculer le temps de 5 s
   if (key === 'p' || key === 'P') { if (!repeat) rewind(5); return; }
-  if (key === ' ' && !keys[' ']) wantJump = true;   // Espace : sauter
+  // sauter : ↓ et ↑ enfoncées en même temps (l'une enfoncée pendant que l'autre l'est encore), avec la détente
+  // disponible accumulée par ↓ ; ↑ après avoir lâché ↓, même aussitôt, ne fait que tendre les jambes (pomper) ;
+  // ou le bouton de saut de la manette
+  if (key === ' ' && !keys[' ']) wantJump = true;
+  if (!repeat && ((key === 'ArrowUp' && keys.ArrowDown) || (key === 'ArrowDown' && keys.ArrowUp))) wantJump = true;
   if (key === 'n' || key === 'N') reset();
   // X : au sol et à l'arrêt = avancer de 10 m ; en l'air = x-up (géré dans step)
   if ((key === 'x' || key === 'X') && !repeat && !p.air) skipAhead();
@@ -697,8 +1146,10 @@ addEventListener('keydown', e => {
   // manette configurée : les touches que le navigateur fabrique à partir des boutons de la manette sont ignorées
   if (controlMode === 'pad' && padCustom) { if (e.key !== 'Escape' && e.key !== 'F5') e.preventDefault(); return; }
   if (e.key === 'e' || e.key === 'E') { openEditor(); return; }
-  // flèches et Espace : pas de défilement de la page, ni de clic sur le bouton qui aurait le focus
+  // flèches et Espace : pas de défilement de la page, ni de clic sur le bouton qui aurait le focus ; Espace ne fait
+  // plus sauter au clavier (↓ + ↑)
   if (e.key.startsWith('Arrow') || e.key === ' ') e.preventDefault();
+  if (e.key === ' ') return;
   keyDown(e.key, e.repeat, e.timeStamp);
 });
 addEventListener('keyup', e => { if (e.key === ' ' && !editorOpen) e.preventDefault(); keys[e.key] = false; });
@@ -731,7 +1182,7 @@ let padConnected = false;
 const PAD_ACTIONS = [
   { key: 'PadGas',    label: 'Pédaler (dans le sens du vélo) · en l\'air : pivoter ↻', tip: 'gâchette droite (R2)' },
   { key: 'PadBrake',  label: 'Freiner · en l\'air : pivoter ↺',                         tip: 'gâchette gauche (L2)' },
-  { key: ' ',         label: 'Sauter (plus haut après ↓ maintenu jusqu\'à 1 s)',        tip: 'bouton R1' },
+  { key: ' ',         label: 'Sauter (détente disponible : ↓ maintenu jusqu\'à 1 s)',   tip: 'bouton R1' },
   { key: 'ArrowUp',   label: 'Pousser, jambes tendues (maintenir)',                      tip: 'bouton Croix' },
   { key: 'ArrowDown', label: 'Se compresser (maintenir)',                                tip: 'bouton L1' },
   { key: 'r',         label: 'Rotation 360° (maintenir)',                                tip: 'stick gauche vers le haut' },
@@ -842,9 +1293,10 @@ cv.addEventListener('pointerdown', e => {
 
 // ---------- Rampe de départ ----------
 // Descente en quart de sinusoïde, sans plateforme : la plus raide (~32°) dès le départ, de plus en plus douce
-// jusqu'en bas ; sa hauteur est calculée pour arriver en bas à RAMP_TARGET_V en roue libre (sans pédaler ni
-// pumper), avec les frottements réglés au moment du départ
+// jusqu'en bas ; sa hauteur est d'abord calculée pour arriver en bas à RAMP_TARGET_V en roue libre (sans pédaler ni
+// pumper), avec les frottements réglés au moment du départ, puis réglée sur le premier saut (tuneStartRamp)
 const RAMP_TARGET_V = 40 / 3.6 * PX_PER_M;   // 40 km/h
+const RAMP_MARGIN = 1.08;                    // vitesse visée au pied du premier saut : mini + 8 %
 const RAMP_RUNOUT = 400, START_X = 45;       // départ juste à droite de la butée LEFT_STOP (vélo entier sur la pente)
 let rampEndX = 0, rampReported = false;
 const rampShape = (H, x) => {
@@ -864,34 +1316,107 @@ function rampEndSpeed(H) {
   }
   return v;
 }
+// Hauteur (px) d'une rampe qui donne la vitesse v en bas, par dichotomie
+function rampHeightFor(v) {
+  let lo = 10, hi = 4000;
+  for (let i = 0; i < 30; i++) { const m = (lo + hi) / 2; if (rampEndSpeed(m) < v) lo = m; else hi = m; }
+  return hi;
+}
+// La rampe est suivie directement d'un saut (pas de plat ni de bosses tirés au hasard entre les deux, dont les
+// décollages rendraient la vitesse au premier saut imprévisible) : enchaînement en goat comme ailleurs, sinon un
+// saut de la bibliothèque (hors bosses ; jamais un enchaînement, conçu pour une vitesse que la rampe ne donne pas
+// forcément)
 function addStartRamp() {
-  let lo = 10, hi = 4000;   // hauteur en pixels, recherche par dichotomie
-  for (let i = 0; i < 30; i++) { const m = (lo + hi) / 2; if (rampEndSpeed(m) < RAMP_TARGET_V) lo = m; else hi = m; }
-  const H = hi;
+  const H = rampHeightFor(RAMP_TARGET_V);
   segStarts.push(0); segBase.push(0);
-  rampEndX = 2.5 * H;
+  rampEndX = Math.round(2.5 * H);
   for (let x = 0; x < rampEndX; x++) heights.push(rampShape(H, x));
   addSeg(RAMP_RUNOUT, () => 0);
   rampReported = false;
+  segRef.push(null); segFlat.push([0, jumpSpan]);
+  const jumps = library.filter(e => !(e.type === 'proc' && e.kind === 'rollers'));
+  segStarts.push(heights.length); segBase.push(baseH); segRef.push(null); segFlat.push([0, jumpSpan]);
+  if (jumps.length) addEntry(jumps[Math.floor(Math.random() * jumps.length)]);
+  else segStarts.pop(), segBase.pop(), segRef.pop(), segFlat.pop();
+}
+// Remplace la rampe par une rampe de hauteur H : la piste qui suit (au niveau 0 en bas de la rampe) glisse d'autant,
+// avec ses lèvres et ses débuts d'éléments ; les prédictions (positions absolues) sont à refaire
+function setStartRamp(H) {
+  const n = Math.round(2.5 * H), dx = n - rampEndX;
+  const ramp = [];
+  for (let x = 0; x < n; x++) ramp.push(rampShape(H, x));
+  heights.splice(0, rampEndX, ...ramp);
+  for (let i = 1; i < segStarts.length; i++) segStarts[i] += dx;
+  for (const k of lips) {
+    k.x += dx; k.pred = undefined;
+    if (k.top !== undefined) k.top += dx;
+    if (k.landEnd !== undefined) k.landEnd += dx;
+    if (k.footX !== undefined) k.footX += dx;
+  }
+  rampEndX = n;
+}
+// Règle la rampe pour arriver au pied du premier saut à la bonne vitesse, en roue libre depuis le départ : mini
+// + 8 % (milieu de la fenêtre pour un enchaînement). Vitesse en bas visée d'après la prédiction, puis corrigée
+// jusqu'à 4 fois d'après la vraie physique (le pilote qui roule de la rampe au pied du saut)
+// (piste prolongée à plat le temps du réglage : la suite n'est générée qu'ensuite, avec le pilote de référence)
+function tuneStartRamp() {
+  withPad(() => {
+    let k = null;
+    for (const q of lips) if (q.dir > 0 && q.x > rampEndX && (!k || q.x < k.x) && jumpPred(q)) k = q;
+    if (k && k.pred.atFoot !== Infinity) tuneRampFor(k);
+  });
+}
+function tuneRampFor(k) {
+  // mini + 8 %, sans dépasser le milieu de la fenêtre (enchaînement : le milieu)
+  const target = () => k.combo ? (k.pred.atFoot + k.pred.atFootMax) / 2
+    : Math.min(k.pred.atFoot * RAMP_MARGIN, (k.pred.atFoot + k.pred.atFootMax) / 2);
+  let vb = speedNeeded(k, rampEndX) * target() / k.pred.atFoot;   // vitesse visée en bas de la rampe
+  for (let it = 0; it < 5; it++) {
+    setStartRamp(rampHeightFor(vb));
+    jumpPred(k);
+    if (it === 4) break;
+    const v = simSpeedAt(startState(), k.pred.foot), t = target();
+    if (Math.abs(v - t) < 0.01 * t) break;
+    vb = Math.sqrt(Math.max(0, vb * vb + t * t - v * v));
+  }
+}
+// État du pilote au départ, à l'arrêt en haut de la rampe
+// h : extension des jambes (0 compressé → LEG_STROKE tendu), u : vitesse du corps par rapport au vélo,
+// pop : force de la détente rapide en cours (× poids, 0 = aucune), lock : vitesse du corps quand les jambes arrivent
+// en butée, I : moment d'inertie de rotation relatif (1 = debout)
+function startState() {
+  const x0 = START_X;
+  const s = { x: x0, y: ground(x0), v: 0, vx: 0, vy: 0, air: false, ang: 0, crouch: 0,
+              h: LEG_STROKE, u: 0, uG: 0, pop: 0, lock: 0, I: 1,
+              crank: 0, wheel: 0, crashed: 0, maxX: x0, x0, airTime: 0,
+              av: 0, rot: 0, crashRot: 0, crashTarget: 0, dir: 1,
+              segI: 0, entry: { x: x0, v: 180 } };   // entry : début de l'élément de piste en cours et vitesse en y entrant
+  s.tr = { hands: 0, feet: 0, whips: 0, xup: false, spins: 0, superman: false };
+  return s;
 }
 
 function reset() {
-  heights = []; segStarts = []; segBase = []; lips = []; baseH = 0;
-  addStartRamp();
   rec = []; recDur = 0; recording = false; replay = null;   // le replay ne remonte pas avant une nouvelle partie
   hist = []; simT = 0;
   downHold = 0; downGrace = 0;
-  // h : extension des jambes (0 compressé → LEG_STROKE tendu), u : vitesse du corps par rapport au vélo,
-  // pop : force de la détente rapide en cours (× poids, 0 = aucune), lock : vitesse du corps quand les jambes arrivent
-  // en butée, I : moment d'inertie de rotation relatif (1 = debout)
-  const x0 = START_X;
-  p = { x: x0, y: 0, v: 0, vx: 0, vy: 0, air: false, ang: 0, crouch: 0,
-        h: LEG_STROKE, u: 0, uG: 0, pop: 0, lock: 0, I: 1,
-        crank: 0, wheel: 0, crashed: 0, maxX: x0, x0, airTime: 0,
-        av: 0, rot: 0, crashRot: 0, crashTarget: 0, dir: 1,
-        segI: 0, entry: { x: x0, v: 180 } };   // entry : début de l'élément de piste en cours et vitesse en y entrant
+  // rampe et premier saut, refaits (5 essais) tant que le pilote de référence ne passe pas ce premier saut : sans
+  // lui, la suite de la piste ne serait pas vérifiée
+  let end = 0;
+  refState = null;
+  for (let n = 0; n < 5 && !refState; n++) {
+    heights = []; segStarts = []; segBase = []; segRef = []; segFlat = []; lips = []; baseH = 0; refState = null;
+    flatRun = 0; jumpSpan = 15 * PX_PER_M;
+    addStartRamp();
+    tuneStartRamp();
+    // pilote de référence : de l'arrêt en haut de la rampe jusqu'au bout du premier saut
+    end = heights.length;
+    refState = withPad(() => rideRef(startState(), end));
+  }
+  // longueur du premier saut : référence pour le presque plat qui le suit
+  const k1 = lips.filter(l => l.dir > 0).sort((a, b) => a.x - b.x)[0];
+  if (k1) jumpSpan = Math.max(PX_PER_M, spanOf(k1, end));
+  p = startState();
   clearTricks();
-  p.y = ground(p.x);
   camX = 0; camY = p.y; camLead = 0.3;
 }
 let camX = 0, camY = 0, camLead = 0.3;
@@ -973,6 +1498,207 @@ function flightZones(lo, hi, d) {
     zones.push([Math.min(k.x - 8 * d, x), Math.max(k.x - 8 * d, x)]);
   }
   return zones;
+}
+
+// ---------- Prédiction des sauts ----------
+// Sans saut (↓ + ↑), sans pompage ni pédalage, aucune touche enfoncée (jambes souples) : vitesse minimale pour
+// que la roue avant dépasse le sommet de la réception, en supposant que le pilote remet le vélo à plat en l'air.
+// La montée de la bosse d'appel est jouée avec la vraie physique (step) : les jambes qui s'écrasent dans le creux
+// et le lagrangien y coûtent bien plus que la pente seule ; l'élan jusqu'au pied de la bosse est un bilan d'énergie.
+const PRED_CROUCH = 1 - LEG_NEUTRAL;
+const predDrag = () => DRAG_REAL * dragFactor * lerp(1, DRAG_TUCK, PRED_CROUCH);
+// Sommet de la réception de la lèvre k : connu pour les sauts d'origine (k.top) ; sinon, première arête bombée qui
+// redescend (cassure de pente de plus de 0,25), au moins 1 m après la lèvre (pour sauter l'arrondi juste derrière
+// une lèvre) et au plus 40 m plus loin ; null s'il n'y en a pas
+function landingTop(k) {
+  if (k.top !== undefined) return k.top;
+  const d = k.dir, h = x => ground(x) + TRAIL_SLOPE * x, end = k.x + d * 40 * PX_PER_M;
+  let top = null;
+  for (let x = k.x + d * PX_PER_M; d > 0 ? x < end : x > end; x += 2 * d) {
+    const before = (h(x) - h(x - 12 * d)) / 12, after = (h(x + 12 * d) - h(x)) / 12;
+    if (after < -0.1 && after < before - 0.25) { if (top === null || h(x) > h(top)) top = x; }
+    else if (top !== null) return top;
+  }
+  return top;
+}
+// Roule depuis l'état q avec la vraie physique du jeu, dans un bac à sable (l'état du jeu est remis tel quel
+// ensuite), jusqu'au décollage de la lèvre en lipX : renvoie l'état au décollage, ou null si le vélo s'arrête,
+// recule ou dépasse la lèvre au sol. Aucune touche, sauf ↓ quand down(p) est vrai ; les sauts d'avant sont
+// réceptionnés vélo parallèle au sol (pilote qui sait atterrir)
+function simTakeoff(q, lipX, down = null) {
+  // sens de roulage : celui de la lèvre vue depuis le départ (q peut être à l'arrêt, en haut de la rampe)
+  const d = Math.sign(lipX - q.x) || 1;
+  return sandbox(q, () => {
+    for (let n = 0; n < 240 * 30 && p.crashed <= 0; n++) {
+      if (down) keys.ArrowDown = down(p);
+      if (p.air) { p.ang = slope(p.x); p.av = 0; }
+      const was = p.air;
+      step(1 / 240);
+      if (!was && p.air && Math.abs(p.x - lipX) < PX_PER_M) return { x: p.x, y: p.y, vx: p.vx, vy: p.vy, ang: p.ang, h: p.h, u: p.u };
+      if (!p.air && ((p.v * d <= 0 && (n > 240 || q.v * d > 0)) || d * (p.x - lipX) > PX_PER_M)) return null;
+    }
+    return null;
+  });
+}
+// Vitesse au sol en x (vers la droite), en roue libre et sans touche depuis l'état q (même à l'arrêt) ; 0 si le
+// vélo n'y arrive pas
+function simSpeedAt(q, x) {
+  return sandbox(q, () => {
+    for (let n = 0; n < 240 * 60 && p.crashed <= 0; n++) {
+      if (p.air) { p.ang = slope(p.x); p.av = 0; }
+      step(1 / 240);
+      if (!p.air && p.x >= x) return p.v;
+      if (!p.air && n > 240 && p.v <= 0) return 0;
+    }
+    return 0;
+  });
+}
+// Joue run() sur une copie de l'état q, sans aucune touche (sauf celles que run enfonce), sans chute et sans bonus
+// de réception parfaite (on ne compte pas sur lui : un joueur l'obtient rarement), puis remet l'état du jeu tel quel
+let simulating = false;
+function sandbox(q, run) {
+  const saved = [p, particles, msg, msgT, wantJump, downHold, downGrace, severity, simulating, { ...keys }];
+  for (const key in keys) keys[key] = false;
+  p = { ...q, tr: { ...q.tr }, entry: { ...q.entry } }; particles = []; wantJump = false; downHold = 0; downGrace = 0;
+  severity = 0; simulating = true;
+  try { return run(); } finally {
+    [p, particles, msg, msgT, wantJump, downHold, downGrace, severity, simulating] = saved;
+    for (const key in keys) keys[key] = false;
+    Object.assign(keys, saved[9]);
+  }
+}
+// Vol depuis l'état de décollage s (centre de gravité : pesanteur et air ; jambes souples qui reviennent à leur
+// position, ce qui descend le vélo de M_RATIO·Δh), vélo remis à plat ; comme dans step, seul le milieu compte les
+// 0,1 premières s. Renvoie l'abscisse du milieu du vélo au contact, ou Infinity (× d) si la roue avant passe top
+// avant (top : null pour aller jusqu'au contact)
+function flight(s, d, top = null) {
+  const dt = 1 / 240, kd = predDrag(), hN = LEG_NEUTRAL * LEG_STROKE;
+  let { x, y, vx, vy, h, u } = s, off = 0;
+  for (let t = 0; t < 6; t += dt) {
+    const sp = Math.hypot(vx, vy);
+    vx -= kd * sp * vx * dt; vy -= (G + kd * sp * vy) * dt;
+    x += vx * dt; y += vy * dt;
+    u += (LEG_W_SOFT * LEG_W_SOFT * (hN - h) - 2 * LEG_Z_SOFT * LEG_W_SOFT * u) * dt;
+    h += u * dt; off -= M_RATIO * u * dt;
+    if (top !== null && d * (x + d * HALF_WB - top) >= 0) return d * Infinity;
+    const yg = t < 0.1 ? ground(x) : Math.max(ground(x - HALF_WB), ground(x), ground(x + HALF_WB));
+    if (y + off <= yg) return x;
+  }
+  return x;
+}
+// true si la roue avant passe le sommet top de la réception avant que le vélo touche le sol
+const clearsJump = (s, top, d) => Math.abs(flight(s, d, top)) === Infinity;
+// Saut réussi en partant de l'état q (au sol, roulant vers la lèvre k), en roue libre, sans touche sauf ↓ selon down ?
+function clearsFrom(q, k, top, down = null) {
+  const s = simTakeoff(q, k.x, down);
+  return !!s && clearsJump(s, top, k.dir);
+}
+// Consigne « scrub » de la lèvre k : ↓ enfoncé à la distance dist avant la lèvre et maintenu jusqu'à la réception,
+// puis plus aucune touche. Le corps descend encore vers le vélo quand les roues quittent la lèvre : la vitesse
+// des jambes, le long de la normale, retire de la vitesse verticale et ajoute de la vitesse horizontale (voir
+// startAir) ; trop tôt, les jambes sont déjà en butée à la lèvre et il ne reste rien
+function scrubAt(k, dist) {
+  let phase = 0;   // 0 : avant le décollage, 1 : en l'air, 2 : après la réception
+  return q => {
+    if (phase === 0 && q.air) phase = 1;
+    else if (phase === 1 && !q.air) phase = 2;
+    return phase === 1 || (phase === 0 && k.dir * (q.x - k.x) > -dist);
+  };
+}
+// État au sol en x, à la vitesse v dans le sens d, jambes au repos en position souple
+const restState = (x, v, d) => ({ ...p, x, y: ground(x), v: d * v, air: false, ang: slope(x), crashed: 0, dir: d,
+  h: LEG_NEUTRAL * LEG_STROKE, u: 0, uG: 0, pop: 0, lock: 0, crouch: PRED_CROUCH, I: lerp(1, I_TUCK, PRED_CROUCH) });
+// Point de référence 1 m avant le pied de la bosse d'appel (pied : on redescend depuis la lèvre tant que le sol, sans
+// la pente générale, descend, 15 m au plus) : là, le sol n'est pas encore courbé ; plus près, la vitesse du vélo
+// dépend déjà de la courbure (la vitesse du corps (1 − κh)·ṡ reste continue, ṡ augmente en entrant dans le creux)
+function kickerFoot(k) {
+  const d = k.dir, h = x => ground(x) + TRAIL_SLOPE * x;
+  let x = k.x;
+  for (let n = 0; n < 5 * PX_PER_M && h(x - 3 * d) < h(x) - 0.03; n++) x -= 3 * d;
+  return x - d * PX_PER_M;
+}
+// Prédiction d'une lèvre, gardée sur la lèvre (recalculée si le frottement de l'air change) :
+// top : sommet de la réception, foot : pied de la bosse, atFoot : vitesse mini au pied, jambes au repos
+// (Infinity : infranchissable) ; null si on ne trouve pas de réception
+// Enchaînement (k.combo = { big, dist, V }) : il faut scruber la lèvre k (↓ à dist avant elle) pour passer le grand
+// saut big qui suit ; trop lent, on ne passe pas le grand saut, trop vite, on survole la réception du petit même en
+// scrubant : atFoot / atFootMax bornent la fenêtre de vitesse (balayage tous les 2 km/h, bords affinés). La
+// réussite peut tenir en plusieurs plages : on garde celle de la vitesse de conception V, sinon la plus large
+// minOnly : seulement la vitesse mini (génération de la piste ; la maxi coûte autant de simulations)
+function jumpPred(k, minOnly = false) {
+  if (k.pred !== undefined && k.predDrag === dragFactor && (minOnly || !k.pred || k.pred.full)) return k.pred;
+  k.predDrag = dragFactor;
+  const top = landingTop(k);
+  if (top === null) return k.pred = null;
+  const foot = kickerFoot(k);
+  if (k.combo) {
+    const big = k.combo.big, bigTop = landingTop(big);
+    const ok = v => clearsFrom(restState(foot, v, k.dir), big, bigTop, scrubAt(k, k.combo.dist));
+    // bord entre a et b, où ok vaut want en b et !want en a : renvoie la vitesse qui passe
+    const step = 2 / 3.6 * PX_PER_M, refine = (a, b, want) => {
+      for (let i = 0; i < 6; i++) { const m = (a + b) / 2; if (ok(m) === want) b = m; else a = m; }
+      return want ? b : a;
+    };
+    const plages = [];
+    let prev = false, a = 0;
+    for (let v = 20 / 3.6 * PX_PER_M; v <= 90 / 3.6 * PX_PER_M; v += step) {
+      const o = ok(v);
+      if (o && !prev) a = refine(v - step, v, true);
+      if (!o && prev) plages.push([a, refine(v - step, v, false)]);
+      prev = o;
+    }
+    if (prev) plages.push([a, Infinity]);
+    const V = k.combo.V, pick = plages.find(([lo, hi]) => lo <= V && V <= hi)
+      || plages.sort((u, w) => (w[1] - w[0]) - (u[1] - u[0]))[0] || [Infinity, Infinity];
+    return k.pred = { top, foot, atFoot: pick[0], atFootMax: pick[1], full: true };
+  }
+  const ok = v => clearsFrom(restState(foot, v, k.dir), k, top);
+  let lo = 0, hi = 30 * PX_PER_M, atFoot = Infinity;
+  if (ok(hi)) {
+    for (let i = 0; i < 18; i++) { const m = (lo + hi) / 2; if (ok(m)) hi = m; else lo = m; }
+    atFoot = hi;
+  }
+  // vitesse maxi (fin de la réception connue : sauts d'origine) : au-delà, on survole toute la pente de réception
+  // et on retombe sur le plat qui suit
+  let atFootMax = Infinity;
+  if (!minOnly && atFoot !== Infinity && k.landEnd !== undefined) {
+    const inside = v => {
+      const s = simTakeoff(restState(foot, v, k.dir), k.x);
+      return !!s && k.dir * (flight(s, k.dir) - k.landEnd) <= 0;
+    };
+    if (!inside(atFoot)) atFootMax = atFoot;
+    else if (!inside(30 * PX_PER_M)) {
+      let a = atFoot, b = 30 * PX_PER_M;
+      for (let i = 0; i < 16; i++) { const m = (a + b) / 2; if (inside(m)) a = m; else b = m; }
+      atFootMax = a;
+    }
+  }
+  return k.pred = { top, foot, atFoot, atFootMax, full: !minOnly };
+}
+// Vitesse nécessaire en x, avant le pied de la bosse de la lèvre k (en roulant vers elle), pour y arriver à la
+// vitesse mini (ou maxi si max) : bilan d'énergie le long du sol, en remontant depuis le pied (pente, roulement, air)
+function speedNeeded(k, x, max = false) {
+  const d = k.dir, kd = predDrag(), pr = jumpPred(k), v0 = max ? pr.atFootMax : pr.atFoot;
+  if (v0 === Infinity) return Infinity;
+  let v2 = v0 * v0;
+  for (let s = pr.foot; d * (s - x) > 0;) {
+    const s1 = d > 0 ? Math.max(x, s - 3) : Math.min(x, s + 3);
+    const rise = ground(s) - ground(s1), ds = Math.hypot(s - s1, rise);
+    v2 += 2 * G * rise + 2 * (ROLL + kd * v2) * ds;
+    s = s1;
+  }
+  return Math.sqrt(Math.max(0, v2));
+}
+// Prochaine lèvre dans le sens d, devant x, à moins de 60 m (avec une réception repérée)
+function nextLip(x, d) {
+  let best = null;
+  for (let i = lips.length - 1; i >= 0; i--) {
+    const k = lips[i];
+    if (k.x < x - 3000) break;
+    if (k.dir !== d || d * (k.x - x) <= 0 || d * (k.x - x) > 60 * PX_PER_M) continue;
+    if ((best === null || d * (k.x - best.x) < 0) && jumpPred(k)) best = k;
+  }
+  return best;
 }
 // Courbure du sol (1/px) : > 0 dans un creux (le sol appuie plus), < 0 sur une bosse ; bornée à un rayon de 0,5 m
 function curvature(x) {
@@ -1066,10 +1792,10 @@ function step(dt) {
     return;
   }
   const down = keys.ArrowDown;
-  // détente du saut : se charge pendant 1 s de ↓, reste chargée un court instant après l'avoir lâché
+  // détente disponible : se charge pendant 1 s de ↓, reste disponible un court instant après l'avoir lâché
   if (down) { downHold += dt; downGrace = JUMP_GRACE; }
   else if ((downGrace -= dt) <= 0) downHold = 0;
-  // Espace : saut, d'autant plus fort que la détente est chargée (ne sert à rien jambes déjà tendues)
+  // ↓ + ↑ : saut, d'autant plus fort que la détente disponible est grande (ne sert à rien jambes déjà tendues)
   if (wantJump) { p.pop = lerp(POP_NET_MIN, POP_NET_MAX, jumpCharge()); downHold = 0; }
   // traînée : le pilote compressé offre moins de surface au vent
   const dragK = DRAG_REAL * dragFactor * lerp(1, DRAG_TUCK, p.crouch);
@@ -1221,7 +1947,7 @@ function step(dt) {
       // bonus de vitesse si parallèle : seulement sur un vrai saut, et plein seulement sur une pente descendante
       const airF = Math.min(1, Math.max(0, (p.airTime - 0.15) / 0.45));
       const slopeF = Math.min(1, Math.max(0.25, -Math.sin(th) * (p.vx < 0 ? -1 : 1) / 0.25));
-      const gain = LANDING_BONUS * q * q * airF * slopeF;
+      const gain = simulating ? 0 : LANDING_BONUS * q * q * airF * slopeF;
       // seule la composante de la vitesse le long du sol est conservée (la composante perpendiculaire est
       // absorbée par le choc) ; elle peut être négative (le vélo repart en arrière), plus le bonus de réception parallèle
       p.v = (p.vx * Math.cos(th) + p.vy * Math.sin(th)) * (1 + gain);
@@ -1420,6 +2146,7 @@ function drawRider() {
   ctx.restore();
 }
 
+let skillVerdict = { k: null, t: 0, ok: false };   // verdict du pilote de référence pour le prochain saut (draw)
 function draw() {
   ctx.fillStyle = '#f4efe6'; ctx.fillRect(0, 0, W, H);
 
@@ -1472,6 +2199,64 @@ function draw() {
     ctx.fillText(m + ' m', sx(x), Y + 24);
   }
 
+  // prédiction des sauts : vitesse mini – maxi au pied de chaque bosse d'appel (dans le sens de roulage) ; le
+  // prochain saut est en vert si la vitesse actuelle est dans la fenêtre en roue libre, en rouge si elle est trop
+  // faible ou trop élevée
+  const rd = p.air ? (p.vx < 0 ? -1 : 1) : p.v ? Math.sign(p.v) : p.dir;
+  const nk = predOn && !p.air && !p.crashed ? nextLip(p.x, rd) : null;
+  // déjà sur la bosse d'appel : on joue la suite depuis l'état actuel ; avant : vitesse nécessaire ici (fenêtre
+  // mini – maxi pour un enchaînement, en comprimant au repère ↓ de la petite lèvre)
+  const onKick = nk && rd * (p.x - nk.pred.foot) > 0;
+  const nNeed = nk && !onKick ? speedNeeded(nk, p.x) : 0, nMax = nk && !onKick ? speedNeeded(nk, p.x, true) : 0;
+  // verdict : en débutant, roue libre (fenêtre de vitesse) ; aux autres niveaux, le pilote de référence du niveau
+  // (pompage, technique d'appel, scrub) joué depuis l'état actuel jusqu'à la fin de la réception (10 fois par seconde)
+  const skilled = rd > 0 && (LEVELS[level].pump || LEVELS[level].kick);
+  let nOk;
+  if (nk && skilled) {
+    const now = performance.now(), j = nk.combo ? nk.combo.big : nk;
+    if (skillVerdict.k !== nk || now - skillVerdict.t > 100) {
+      const endX = j.landEnd ?? landingTop(j) + 6 * PX_PER_M;
+      skillVerdict = { k: nk, t: now, ok: p.v * rd > 0 && !!rideRef(p, endX) };
+    }
+    nOk = skillVerdict.ok;
+  } else nOk = nk && (onKick ? p.v * rd > 0 && (nk.combo
+      ? clearsFrom(p, nk.combo.big, landingTop(nk.combo.big), scrubAt(nk, nk.combo.dist))
+      : clearsFrom(p, nk, nk.pred.top))
+    : Math.abs(p.v) >= nNeed && Math.abs(p.v) <= nMax);
+  const kmhs = v => (v / PX_PER_M * 3.6).toFixed(0);
+  const speedWin = (a, b) => a === Infinity ? 'trop haut' : b === Infinity ? kmhs(a) + ' km/h' : kmhs(a) + '–' + kmhs(b) + ' km/h';
+  if (predOn) {
+    ctx.font = 'bold 13px system-ui'; ctx.textAlign = 'center'; ctx.lineWidth = 2;
+    for (const k of lips) {
+      if (k.dir !== rd || k.x < xLo - 400 || k.x > xHi + 400) continue;
+      const pr = jumpPred(k);
+      if (!pr) continue;
+      const col = k === nk ? (nOk ? '#1e8449' : '#c0392b') : '#8a7a66';
+      ctx.fillStyle = ctx.strokeStyle = col;
+      const fy = sy(ground(pr.foot));
+      ctx.fillText(speedWin(pr.atFoot, pr.atFootMax), sx(pr.foot), fy - 12);
+      // technique d'appel du niveau : où plier (↓) avant la lèvre ; en rouge, « obligatoire » si le saut suivant
+      // ne passe que si celui-ci est bien fait (plié en haut d'appel, réception pompée)
+      if (!k.combo && k.scrubD != null && LEVELS[level].kick) {
+        const cx = k.x - k.dir * k.scrubD, cy = sy(ground(cx));
+        if (k.mustFold) ctx.fillStyle = ctx.strokeStyle = '#c0392b';
+        ctx.beginPath(); ctx.moveTo(sx(cx), cy - 4); ctx.lineTo(sx(cx), cy - 14); ctx.stroke();
+        ctx.fillText(k.mustFold ? '↓ obligatoire' : '↓', sx(cx), cy - 18);
+        ctx.fillStyle = ctx.strokeStyle = col;
+      }
+      // enchaînement : où enfoncer ↓ avant la petite lèvre (repère ; trait épais le long du sol si c'est une zone)
+      if (k.combo) {
+        const [a, b] = k.combo.win.map(D => k.x - k.dir * D), cx = k.x - k.dir * k.combo.dist, cy = sy(ground(cx));
+        if (a !== b) {
+          ctx.lineWidth = 5; ctx.beginPath();
+          for (let x = Math.min(a, b); x <= Math.max(a, b); x += 2) ctx.lineTo(sx(x), sy(ground(x)) - 7);
+          ctx.stroke(); ctx.lineWidth = 2;
+        } else { ctx.beginPath(); ctx.moveTo(sx(cx), cy - 4); ctx.lineTo(sx(cx), cy - 14); ctx.stroke(); }
+        ctx.fillText('↓', sx(cx), cy - 18);
+      }
+    }
+  }
+
   ctx.fillStyle = 'rgba(140,105,70,0.6)';
   for (const q of particles) ctx.fillRect(sx(q.x) - 1.5, sy(q.y) - 1.5, 3, 3);
 
@@ -1492,13 +2277,28 @@ function draw() {
   ctx.fillRect(rx, 61, rw, 1);
   resetRec = { x: rx - 6, y: 40, w: rw + 12, h: 28 };
   ctx.fillStyle = '#333';
-  // jauge de détente du saut
-  const ch = jumpCharge();
-  ctx.fillText('Détente', 16, 82);
+  // jauge de la détente disponible (accumulée par ↓, pour sauter avec ↓ + ↑)
+  const ch = jumpCharge(), gx = 16 + Math.ceil(ctx.measureText('Détente disponible').width) + 10;
+  ctx.fillText('Détente disponible', 16, 82);
   ctx.strokeStyle = '#999'; ctx.lineWidth = 1;
-  ctx.strokeRect(78.5, 71.5, 120, 12);
+  ctx.strokeRect(gx + 0.5, 71.5, 120, 12);
   ctx.fillStyle = ch >= 1 ? '#c0392b' : '#e67e22';
-  ctx.fillRect(80, 73, 117 * ch, 9);
+  ctx.fillRect(gx + 2, 73, 117 * ch, 9);
+  // prochain saut : vitesse nécessaire ici, en roue libre
+  if (nk) {
+    ctx.fillStyle = nOk ? '#1e8449' : '#c0392b';
+    const fold = nk.combo || (nk.scrubD != null && LEVELS[level].kick);
+    ctx.fillText((nk.combo ? 'Enchaînement' : 'Saut') + ' dans ' + Math.round(Math.abs(nk.x - p.x) / PX_PER_M) + ' m : '
+      + (skilled ? (onKick ? '' : 'roue libre ' + speedWin(nNeed, nMax) + ' · ')
+          + 'en ' + LEVELS[level].name + ' : ' + (nOk ? 'ça passe' : 'ça ne passe pas')
+        : onKick ? (nOk ? 'ça passe' : 'ça ne passe pas')
+        : nNeed === Infinity ? 'trop haut' : speedWin(nNeed, nMax) + ' requis ici')
+      + (fold ? ', ↓ au repère' : '') + (nOk ? ' ✓' : ' ✗'), 16, 106);
+    if (nk.mustFold && LEVELS[level].kick) {
+      ctx.fillStyle = '#c0392b';
+      ctx.fillText('Plier en haut d\'appel et pomper la réception : sinon le saut suivant ne passe pas', 16, 128);
+    }
+  }
   ctx.fillStyle = '#777'; ctx.font = '13px system-ui';
   if (controlMode === 'pad' && !padConnected) {
     ctx.textAlign = 'center'; ctx.font = '15px system-ui';
@@ -1957,10 +2757,10 @@ const CMD_TABLES = {
     ['Pédaler', 'flèche du côté où regarde le vélo'],
     ['Freiner', 'l\'autre flèche'],
     ['Position souple, jambes un peu fléchies', 'aucune touche'],
-    ['Se compresser (charge la détente en 1 s)', '↓ maintenu'],
+    ['Se compresser (la détente disponible se remplit en 1 s)', '↓ maintenu'],
     ['Pousser le vélo, jambes tendues (sans sauter)', '↑ maintenu'],
-    ['Sauter (plus haut compressé, détente chargée par ↓ jusqu\'à 1 s)', 'Espace'],
-    ['Pomper les bosses : compressé au sommet, pousser dans la descente et le creux', '↓ puis ↑'],
+    ['Sauter, avec la détente disponible', '↓ + ↑ ensemble (↑ enfoncé sans lâcher ↓)'],
+    ['Pomper les bosses : compressé au sommet, pousser dans la descente et le creux', '↓, lâcher, puis ↑'],
     ['Avancer de 10 m (à l\'arrêt)', 'X'],
     ['En l\'air'],
     ['Pivoter dans le sens horaire / anti-horaire', '→  /  ←'],
@@ -1983,9 +2783,9 @@ const CMD_TABLES = {
     ['Pédaler (dans le sens du vélo)', 'R2'],
     ['Freiner', 'L2'],
     ['Position souple, jambes un peu fléchies', 'aucune touche'],
-    ['Se compresser (charge la détente en 1 s)', '↓ de la croix  /  stick gauche ↓ (maintenir)'],
+    ['Se compresser (la détente disponible se remplit en 1 s)', '↓ de la croix  /  stick gauche ↓ (maintenir)'],
     ['Pousser le vélo, jambes tendues (sans sauter)', '↑ de la croix (maintenir)'],
-    ['Sauter (plus haut compressé, détente chargée par ↓ jusqu\'à 1 s)', 'Croix'],
+    ['Sauter, avec la détente disponible', 'Croix  /  ↓ + ↑ de la croix ensemble'],
     ['Avancer de 10 m (à l\'arrêt)', 'L1'],
     ['En l\'air'],
     ['Pivoter dans le sens horaire / anti-horaire', 'R2  /  L2  (ou → / ←)'],
@@ -2006,8 +2806,9 @@ const CMD_TABLES = {
     ['Pédaler', 'bouton PÉDALER'],
     ['Freiner', 'bouton FREIN'],
     ['Position souple, jambes un peu fléchies', 'aucun bouton'],
-    ['Se compresser (charge la détente en 1 s)', 'bouton BAS (maintenir)'],
+    ['Se compresser (la détente disponible se remplit en 1 s)', 'bouton BAS (maintenir)'],
     ['Pousser le vélo, jambes tendues (sans sauter)', 'bouton POUSSER (maintenir)'],
+    ['Sauter, avec la détente disponible', 'BAS + POUSSER ensemble (POUSSER sans lâcher BAS)'],
     ['En l\'air'],
     ['Pivoter dans le sens horaire / anti-horaire', 'boutons ↻  /  ↺'],
     ['Se compresser : rotation plus rapide, moins de traînée', 'bouton BAS (maintenir)'],
@@ -2107,6 +2908,18 @@ $('landBtn').addEventListener('click', e => {
   msgT = 2.5;
 });
 showLand();
+// Terrain entre les sauts : mixte → descente → plat ; s'applique à la piste pas encore affichée
+function showTerrain() { $('terrainBtn').textContent = terrain; }
+$('terrainBtn').addEventListener('click', e => {
+  e.currentTarget.blur();
+  terrain = TERRAINS[(TERRAINS.indexOf(terrain) + 1) % TERRAINS.length];
+  try { localStorage.setItem('bmx-terrain', terrain); } catch (err) {}
+  showTerrain(); regenAhead();
+  msg = { mixte: 'Terrain mixte : une descente seulement quand un saut l\'exige',
+          descente: 'Terrain en descente : des descentes entre les sauts',
+          plat: 'Terrain plat : pas de descente, les sauts s\'adaptent à ta vitesse' }[terrain]; msgT = 2.5;
+});
+showTerrain();
 $('cmdClose').addEventListener('click', e => { e.currentTarget.blur(); setCmdPanel(false); });
 addEventListener('keydown', e => { if (e.key === 'Escape' && !$('cmdPanel').hidden) setCmdPanel(false); });
 $('bReplay').addEventListener('click', e => { e.currentTarget.blur(); toggleReplay(); closePanel(); });
